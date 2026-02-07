@@ -84,10 +84,6 @@ I was motivated to create this plugin because I found no tool for Neovim equival
 
 This plugin handles sensitive Personal Access Token (PAT) credentials. They are stored securely in your operating system's keychain (e.g., Windows Credential Manager, macOS Keychain, or libsecret on Linux) via **keytar**. This ensures your credentials are never stored in plain text on your file system.
 
-## License
-
-MIT
-
 ---
 
 **Version v0.0.1**
@@ -100,3 +96,7 @@ MIT
 - **Caching**: Connection pooling and pre-fetching of resources for a responsive UI.
 - **Developer Tools**: Dry-run capabilities to see raw API calls and JSON patch previews before committing changes.
 - **Interactivity**: Integrated with Neovim's native input and list selection systems.
+
+## License
+
+MIT
