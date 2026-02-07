@@ -1,0 +1,33 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+
+# TypeScript/Build
+dist/
+lib/
+out/
+*.tsbuildinfo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Editors/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+rplugin/node/sailpoint/dist/
+rplugin/node/sailpoint/node_modules/
+rplugin/node/sailpoint/test/
+coverage/
+*.lcov
+.jest/
