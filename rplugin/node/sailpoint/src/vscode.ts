@@ -21,7 +21,7 @@ export interface CancellationToken {
 }
 
 export interface QuickInputButton {
-    iconPath: Uri | { light: Uri; dark: Uri } | ThemeIcon;
+    iconPath: Uri | { light: Uri; dark: Uri };
     tooltip?: string;
 }
 
@@ -101,104 +101,6 @@ export interface InputBoxOptions {
     validateInput?: (value: string) => string | undefined | null | Promise<string | undefined | null>;
 }
 
-export enum TreeItemCollapsibleState {
-    None = 0,
-    Collapsed = 1,
-    Expanded = 2
-}
-
-export class TreeItem {
-    label?: string | TreeItemLabel;
-    id?: string;
-    iconPath?: string | Uri | { light: string | Uri; dark: string | Uri } | ThemeIcon;
-    description?: string | boolean;
-    resourceUri?: Uri;
-    tooltip?: string | undefined;
-    command?: any;
-    collapsibleState?: TreeItemCollapsibleState;
-    contextValue?: string;
-    
-    constructor(label: string | TreeItemLabel, collapsibleState?: TreeItemCollapsibleState) {
-        this.label = label;
-        this.collapsibleState = collapsibleState;
-    }
-}
-
-export interface TreeItemLabel {
-    label: string;
-    highlights?: [number, number][];
-}
-
-export class ThemeIcon {
-    constructor(public readonly id: string, public readonly color?: any) {}
-}
-
-export class Position {
-    constructor(public line: number, public character: number) {}
-}
-
-export class Range {
-    constructor(public start: Position, public end: Position) {}
-}
-
-export class Selection extends Range {
-    isSingleLine: boolean;
-    constructor(anchorLine: number, anchorCharacter: number, activeLine: number, activeCharacter: number) {
-        super(new Position(anchorLine, anchorCharacter), new Position(activeLine, activeCharacter));
-        this.isSingleLine = anchorLine === activeLine;
-    }
-}
-
-export interface TextDocument {
-    uri: Uri;
-    fileName: string;
-    isUntitled: boolean;
-    languageId: string;
-    version: number;
-    isDirty: boolean;
-    isClosed: boolean;
-    save(): Thenable<boolean>;
-    eol: number;
-    lineCount: number;
-    lineAt(line: number): { text: string };
-    getText(range?: Range): string;
-}
-
-export interface TextEditor {
-    document: TextDocument;
-    selection: Selection;
-    selections: Selection[];
-    edit(callback: (editBuilder: any) => void): Thenable<boolean>;
-}
-
-export enum ProgressLocation {
-    SourceControl = 1,
-    Window = 10,
-    Notification = 15
-}
-
-export enum ConfigurationTarget {
-    Global = 1,
-    Workspace = 2,
-    WorkspaceFolder = 3
-}
-
-export type ConfigurationScope = Uri | null;
-
-export interface OpenDialogOptions {
-    canSelectFiles?: boolean;
-    canSelectFolders?: boolean;
-    canSelectMany?: boolean;
-    defaultUri?: Uri;
-    filters?: { [name: string]: string[] };
-    openLabel?: string;
-    title?: string;
-}
-
-export class WorkspaceEdit {
-    insert(uri: Uri, position: Position, newText: string): void {}
-}
-
 export namespace window {
     export function showErrorMessage(message: string) {
         if (nvim) {
@@ -273,17 +175,11 @@ export namespace window {
             return undefined;
         }
     }
-    export function showOpenDialog(options: OpenDialogOptions): Promise<Uri[] | undefined> {
-        return Promise.resolve(undefined);
-    }
     export function createInputBox(): InputBox {
-        return {} as any;
+        throw new Error("createInputBox is not implemented in this environment.");
     }
     export function createQuickPick<T extends QuickPickItem>(): QuickPick<T> {
-        return {} as any;
-    }
-    export function showTextDocument(document: TextDocument, column?: any): Promise<TextEditor> {
-        return Promise.resolve({} as any);
+        throw new Error("createQuickPick is not implemented in this environment.");
     }
 }
 
@@ -329,12 +225,6 @@ export namespace workspace {
     }
     export const onDidSaveTextDocument = (listener: any) => { return { dispose: () => {} } };
     export const registerFileSystemProvider = () => { return { dispose: () => {} } };
-    export const openTextDocument = (uri: Uri) => Promise.resolve({} as TextDocument);
-    export const applyEdit = (edit: WorkspaceEdit) => Promise.resolve(true);
-}
-
-export namespace languages {
-    export const setTextDocumentLanguage = (document: TextDocument, languageId: string) => Promise.resolve(document);
 }
 
 export namespace env {
@@ -480,5 +370,5 @@ export interface ExtensionContext {
 
 export const version = "1.74.0";
 export const extensions = {
-    getExtension: () => ({ packageJSON: { version: "0.0.1" } })
+    getExtension: () => ({ packageJSON: { version: "0.0.2" } })
 };

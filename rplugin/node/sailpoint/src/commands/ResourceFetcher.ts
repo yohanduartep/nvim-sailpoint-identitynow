@@ -18,29 +18,32 @@ export class ResourceFetcher {
         }
         if (!Array.isArray(items)) return [];
         // deduplicate
-        return Array.from(new Map(items.map(item => [item.id || item.name || Math.random(), item])).values());
+        return Array.from(new Map(items.map(item => [item.id || item.name || JSON.stringify(item), item])).values());
     }
+
+    private readonly fetchers: Record<string, (client: ISCClient, version: string, activeTenantIndex: number, query?: string) => Promise<any[]>> = {
+        sources: (c, v) => this.fetchWithFallback(c, () => c.getSources(), `/${v}/sources`),
+        transforms: (c, v) => this.fetchWithFallback(c, () => c.getTransforms(), `/${v}/transforms`),
+        roles: (c, v, _, q) => q ? c.paginatedSearchRoles(q, 50).then(r => r.data) : this.fetchWithFallback(c, () => c.getAllRoles(), `/${v}/roles`),
+        'access-profiles': (c, v, _, q) => q ? c.paginatedSearchAccessProfiles(q, 50).then(r => r.data) : this.fetchWithFallback(c, async () => (await c.getAccessProfiles()).data, `/${v}/access-profiles`),
+        rules: (c) => this.fetchWithFallback(c, () => c.getConnectorRules(), '/beta/connector-rules'),
+        workflows: (c, v) => this.fetchWithFallback(c, () => c.getWorflows(), `/${v}/workflows`),
+        apps: (c, v) => this.fetchWithFallback(c, async () => (await c.getPaginatedApplications('')).data, `/${v}/source-apps`),
+        identities: (c, _, __, q) => q ? c.searchIdentities(q, 50) : c.listIdentities({}).then(r => r.data),
+        campaigns: (c) => c.getPaginatedCampaigns('').then(r => r.data),
+        'service-desk': (c) => c.getServiceDesks(),
+        'identity-profiles': (c) => c.getIdentityProfiles(),
+        forms: (c) => c.listForms(),
+        'search-attributes': (c) => c.getSearchAttributes(),
+        'identity-attributes': (c) => c.getIdentityAttributes(),
+        tenants: (_, __, idx) => Promise.resolve(this.tenantService.getTenants().map((t, i) => ({ id: t.id, name: t.name, tenantName: t.tenantName, isActive: i === idx, version: t.version })))
+    };
 
     public async fetchItemsInternal(type: string, getClient: () => { client: ISCClient, version: string }, activeTenantIndex: number, query?: string): Promise<any[]> {
         const { client, version } = getClient();
-        
-        if (type === 'sources') return await this.fetchWithFallback(client, () => client.getSources(), `/${version}/sources`);
-        if (type === 'transforms') return await this.fetchWithFallback(client, () => client.getTransforms(), `/${version}/transforms`);
-        if (type === 'roles') return query ? (await client.paginatedSearchRoles(query, 50)).data : await this.fetchWithFallback(client, () => client.getAllRoles(), `/${version}/roles`);
-        if (type === 'access-profiles') return query ? (await client.paginatedSearchAccessProfiles(query, 50)).data : await this.fetchWithFallback(client, async () => (await client.getAccessProfiles()).data, `/${version}/access-profiles`);
-        if (type === 'rules') return await this.fetchWithFallback(client, () => client.getConnectorRules(), '/beta/connector-rules');
-        if (type === 'workflows') return await this.fetchWithFallback(client, () => client.getWorflows(), `/${version}/workflows`);
-        if (type === 'apps') return await this.fetchWithFallback(client, async () => (await client.getPaginatedApplications('')).data, `/${version}/source-apps`);
-        if (type === 'identities') return query ? await client.searchIdentities(query, 50) : (await client.listIdentities({})).data;
-        if (type === 'campaigns') return (await client.getPaginatedCampaigns('')).data;
-        if (type === 'service-desk') return await client.getServiceDesks();
-        if (type === 'identity-profiles') return await client.getIdentityProfiles();
-        if (type === 'forms') return await client.listForms();
-        if (type === 'search-attributes') return await client.getSearchAttributes();
-        if (type === 'identity-attributes') return await client.getIdentityAttributes();
-        if (type === 'tenants') {
-            const tenants = this.tenantService.getTenants();
-            return tenants.map((t, i) => ({ id: t.id, name: t.name, tenantName: t.tenantName, isActive: i === activeTenantIndex, version: t.version }));
+        const fetcher = this.fetchers[type];
+        if (fetcher) {
+            return await fetcher(client, version, activeTenantIndex, query);
         }
         return [];
     }

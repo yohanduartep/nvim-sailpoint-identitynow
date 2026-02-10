@@ -1,7 +1,251 @@
 local M = {}
 
+-- SailPoint IdentityNow Plugin for Neovim
+-- This module provides the core Lua interface for interacting with the SailPoint backend,
+-- managing the sidebar UI, and handling user commands.
+
 M.cache = {}
+M.raw_cache = {}
+M.sidebar_state = { expanded = {} }
+M.sidebar_nodes = {}
 M.is_active = false
+
+local all_types = {}
+
+-- Loads resource definitions from the TypeScript backend to ensure a single source of truth.
+local function load_resource_types()
+	local fallback = {
+		{ id = "tenants", name = "Tenants" },
+		{ id = "access-profiles", name = "Access Profiles" },
+		{ id = "apps", name = "Applications" },
+		{ id = "campaigns", name = "Campaigns" },
+		{ id = "forms", name = "Forms" },
+		{ id = "identities", name = "Identities" },
+		{ id = "identity-attributes", name = "Identity Attributes" },
+		{ id = "identity-profiles", name = "Identity Profiles" },
+		{ id = "roles", name = "Roles" },
+		{ id = "rules", name = "Rules" },
+		{ id = "search-attributes", name = "Search Attribute Config" },
+		{ id = "service-desk", name = "Service Desk" },
+		{ id = "sources", name = "Sources" },
+		{ id = "transforms", name = "Transforms" },
+		{ id = "workflows", name = "Workflows" },
+	}
+
+	local ok, defs = pcall(vim.fn.SailPointGetResourceDefinitions)
+	if ok and type(defs) == "table" and #defs > 0 then
+		local tenants_cat = nil
+		local others = {}
+		for _, d in ipairs(defs) do
+			if d.id == "tenants" then
+				tenants_cat = d
+			else
+				table.insert(others, d)
+			end
+		end
+		table.sort(others, function(a, b)
+			return a.name:lower() < b.name:lower()
+		end)
+		all_types = others
+		if tenants_cat then
+			table.insert(all_types, 1, tenants_cat)
+		end
+	else
+		local tenants_cat = table.remove(fallback, 1)
+		table.sort(fallback, function(a, b)
+			return a.name:lower() < b.name:lower()
+		end)
+		all_types = fallback
+		if tenants_cat then
+			table.insert(all_types, 1, tenants_cat)
+		end
+	end
+end
+
+-- Opens a buffer for the specified resource type and ID.
+-- Uses the openConfig from the backend definition to determine the correct action.
+function M.open_resource(type, id)
+	local res_def = nil
+	for _, d in ipairs(all_types) do
+		if d.id == type then
+			res_def = d
+			break
+		end
+	end
+
+	if not res_def or not res_def.openConfig then
+		print("Not implemented: " .. type)
+		return
+	end
+
+	local config = res_def.openConfig
+	local tenant = vim.fn.SailPointGetActiveTenant()
+	local version = (tenant and tenant.version) or "v3"
+
+	if config.type == "command" then
+		vim.cmd(config.command .. " " .. id)
+	elseif config.type == "raw" then
+		local path = config.path:find("^/") and config.path or ("/" .. version .. "/" .. config.path)
+		vim.cmd("SPIRaw " .. path .. "/" .. id)
+	elseif config.type == "fallback" then
+		local path = config.path:find("^/") and config.path or ("/" .. version .. "/" .. config.path)
+		local fallback = config.fallbackPath:find("^/") and config.fallbackPath or ("/" .. version .. "/" .. config.fallbackPath)
+		
+		-- Special case for search-attributes which doesn't take an ID in the URL for config
+		local target_id = id
+		if type == "search-attributes" then
+			target_id = "config"
+		else
+			path = path .. "/" .. id
+			fallback = fallback .. "/" .. id
+		end
+		
+		vim.fn.SailPointRawWithFallback(path, fallback, type, target_id)
+	end
+end
+
+-- Renders the sidebar tree view in the sailpoint-sidebar buffer.
+-- Uses M.raw_cache to populate the tree nodes and handles expansion states.
+function M.render_sidebar()
+	local bufnr = nil
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		local buf = vim.api.nvim_win_get_buf(win)
+		if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "sailpoint-sidebar" then
+			bufnr = buf
+			break
+		end
+	end
+	if not bufnr then
+		return
+	end
+
+	vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
+	local lines = {}
+	M.sidebar_nodes = {}
+
+	table.insert(lines, " SailPoint Navigator")
+	table.insert(lines, " " .. string.rep("─", 25))
+	table.insert(M.sidebar_nodes, { type = "header" })
+	table.insert(M.sidebar_nodes, { type = "header" })
+
+	for _, res_type in ipairs(all_types) do
+		local is_expanded = M.sidebar_state.expanded[res_type.id]
+		local icon = is_expanded and "▼" or "▶"
+		table.insert(lines, string.format(" %s %s", icon, res_type.name))
+		table.insert(M.sidebar_nodes, { type = "category", id = res_type.id })
+
+		if is_expanded then
+			local items = M.raw_cache[res_type.id]
+			if items and #items > 0 then
+				for _, item in ipairs(items) do
+					local name = item.name or item.displayName or item.id or "Unknown"
+					if res_type.id == "tenants" and item.isActive then
+						name = name .. " *"
+					end
+					table.insert(lines, "   " .. name)
+					table.insert(M.sidebar_nodes, {
+						type = "item",
+						id = item.id,
+						resource_type = res_type.id,
+						value = item,
+					})
+				end
+			elseif items == nil then
+				table.insert(lines, "   (Loading...)")
+				table.insert(M.sidebar_nodes, { type = "loading" })
+			else
+				table.insert(lines, "   (No items)")
+				table.insert(M.sidebar_nodes, { type = "empty" })
+			end
+		end
+	end
+
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.api.nvim_buf_set_option(bufnr, "modifiable", false)
+end
+
+-- Handles user interactions (clicks/enter) in the sidebar buffer.
+-- Expands/collapses categories or opens resources.
+function M.sidebar_click()
+	local line = vim.api.nvim_win_get_cursor(0)[1]
+	local node = M.sidebar_nodes[line]
+	if not node then
+		return
+	end
+
+	if node.type == "category" then
+		M.sidebar_state.expanded[node.id] = not M.sidebar_state.expanded[node.id]
+		if M.sidebar_state.expanded[node.id] and not M.raw_cache[node.id] then
+			pcall(vim.fn.SailPointFetchItems, node.id)
+		end
+		M.render_sidebar()
+	elseif node.type == "item" then
+		if node.resource_type == "tenants" then
+			vim.cmd("SPISwitchTenant " .. node.id)
+			M.cache = {}
+			M.raw_cache = {}
+			pcall(vim.cmd, "SPIPrefetchAll")
+			M.render_sidebar()
+		else
+			local target_win = nil
+			local non_sidebar_windows = {}
+			for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+				local buf = vim.api.nvim_win_get_buf(win)
+				if vim.bo[buf].filetype ~= "sailpoint-sidebar" then
+					table.insert(non_sidebar_windows, win)
+				end
+			end
+
+			if #non_sidebar_windows > 0 then
+				target_win = non_sidebar_windows[1]
+				vim.api.nvim_set_current_win(target_win)
+				local buf = vim.api.nvim_win_get_buf(target_win)
+				local name = vim.api.nvim_buf_get_name(buf)
+				local is_sailpoint_buffer = name:find("^SailPoint:/") ~= nil
+				if #non_sidebar_windows > 1 or is_sailpoint_buffer then
+					vim.cmd("rightbelow split")
+				end
+			else
+				vim.cmd("rightbelow vertical split")
+			end
+
+			M.open_resource(node.resource_type, node.id)
+		end
+	end
+end
+
+-- Initializes the sidebar buffer with specific filetype, options, and keymaps.
+function M.setup_sidebar_buffer()
+	if #all_types == 0 then
+		load_resource_types()
+	end
+	local bufnr = vim.api.nvim_get_current_buf()
+	vim.bo[bufnr].filetype = "sailpoint-sidebar"
+	vim.bo[bufnr].buftype = "nofile"
+	vim.bo[bufnr].swapfile = false
+	vim.bo[bufnr].bufhidden = "hide"
+
+	vim.api.nvim_buf_set_keymap(bufnr, "n", "<CR>", "", {
+		callback = function()
+			M.sidebar_click()
+		end,
+		noremap = true,
+		silent = true,
+	})
+	vim.api.nvim_buf_set_keymap(bufnr, "n", "o", "", {
+		callback = function()
+			M.sidebar_click()
+		end,
+		noremap = true,
+		silent = true,
+	})
+
+	if not next(M.raw_cache) then
+		pcall(vim.cmd, "SPIPrefetchAll")
+	end
+
+	M.render_sidebar()
+end
 
 local function append_lines(target, input)
 	if type(input) == "string" then
@@ -16,6 +260,11 @@ local function append_lines(target, input)
 end
 
 _G.SailPointUpdateCache = function(type, items, err)
+	M.raw_cache[type] = items
+	vim.schedule(function()
+		M.render_sidebar()
+	end)
+
 	local lines = {}
 	if err and err ~= "" then
 		table.insert(lines, "Error fetching " .. type .. ":")
@@ -95,32 +344,59 @@ function M.check_health()
 	end
 end
 
+-- Main setup function.
+-- Configures the sidebar width, keymaps, and registers user commands.
 function M.setup(opts)
 	opts = opts or {}
+	load_resource_types()
+	local sidebar_width = opts.sidebar_width or 35
+	local sidebar_keymap = opts.sidebar_keymap or "<leader>tt"
 
-	local all_types = {
-		{ id = "tenants", name = "Tenants" },
-		{ id = "access-profiles", name = "Access Profiles" },
-		{ id = "apps", name = "Applications" },
-		{ id = "campaigns", name = "Campaigns" },
-		{ id = "forms", name = "Forms" },
-		{ id = "identities", name = "Identities" },
-		{ id = "identity-attributes", name = "Identity Attributes" },
-		{ id = "identity-profiles", name = "Identity Profiles" },
-		{ id = "roles", name = "Roles" },
-		{ id = "rules", name = "Rules" },
-		{ id = "search-attributes", name = "Search Attribute Config" },
-		{ id = "service-desk", name = "Service Desk" },
-		{ id = "sources", name = "Sources" },
-		{ id = "transforms", name = "Transforms" },
-		{ id = "workflows", name = "Workflows" },
-	}
+	local function setup_sidebar_controls()
+		local sailpoint_win = nil
+		vim.api.nvim_create_autocmd({ "FileType", "WinEnter" }, {
+			group = vim.api.nvim_create_augroup("SailPointSidebar", { clear = true }),
+			callback = function(ev)
+				local buf = ev.buf or vim.api.nvim_get_current_buf()
+				if vim.bo[buf].filetype ~= "sailpoint-sidebar" then
+					return
+				end
+				local win = vim.fn.bufwinid(buf)
+				if win == -1 then
+					return
+				end
+				vim.api.nvim_win_set_width(win, sidebar_width)
+				vim.wo[win].winfixwidth = true
+			end,
+		})
 
-	local tenants_cat = table.remove(all_types, 1)
-	table.sort(all_types, function(a, b)
-		return a.name:lower() < b.name:lower()
-	end)
-	table.insert(all_types, 1, tenants_cat)
+		if sidebar_keymap then
+			vim.keymap.set("n", sidebar_keymap, function()
+				if sailpoint_win and vim.api.nvim_win_is_valid(sailpoint_win) then
+					vim.api.nvim_win_close(sailpoint_win, true)
+					sailpoint_win = nil
+					return
+				end
+
+				local saved_equalalways = vim.o.equalalways
+				vim.o.equalalways = false
+				vim.cmd("topleft vnew")
+				sailpoint_win = vim.api.nvim_get_current_win()
+				vim.api.nvim_win_set_width(sailpoint_win, sidebar_width)
+				vim.wo[sailpoint_win].winfixwidth = true
+				vim.o.equalalways = saved_equalalways
+
+				vim.wo[sailpoint_win].number = false
+				vim.wo[sailpoint_win].relativenumber = false
+				vim.wo[sailpoint_win].signcolumn = "no"
+				vim.wo[sailpoint_win].wrap = false
+
+				vim.cmd("SetSail")
+			end, { silent = true, desc = "Toggle SailPoint Sidebar" })
+		end
+	end
+
+	setup_sidebar_controls()
 
 	local preview_timer = vim.loop.new_timer()
 	local pick_resource_type
@@ -271,54 +547,7 @@ function M.setup(opts)
 							end
 
 							on_close(prompt_bufnr)
-							local tenant = vim.fn.SailPointGetActiveTenant()
-							local version = (tenant and tenant.version) or "v3"
-							if type == "sources" then
-								vim.cmd("SPIGetSource " .. id)
-							elseif type == "transforms" then
-								vim.cmd("SPIGetTransform " .. id)
-							elseif type == "roles" then
-								vim.cmd("SPIGetRole " .. id)
-							elseif type == "access-profiles" then
-								vim.cmd("SPIGetAccessProfile " .. id)
-							elseif type == "rules" then
-								vim.cmd("SPIGetConnectorRule " .. id)
-							elseif type == "workflows" then
-								vim.cmd("SPIGetWorkflow " .. id)
-							elseif type == "service-desk" then
-								vim.cmd("SPIRaw /" .. version .. "/service-desk-integrations/" .. id)
-							elseif type == "identity-profiles" then
-								vim.cmd("SPIRaw /" .. version .. "/identity-profiles/" .. id)
-							elseif type == "forms" then
-								vim.fn.SailPointRawWithFallback(
-									"/" .. version .. "/forms/" .. id,
-									"/beta/forms/" .. id,
-									"forms",
-									id
-								)
-							elseif type == "search-attributes" then
-								vim.fn.SailPointRawWithFallback(
-									"/" .. version .. "/search-attribute-config",
-									"/beta/search-attribute-config",
-									"search-attributes",
-									"config"
-								)
-							elseif type == "identity-attributes" then
-								vim.fn.SailPointRawWithFallback(
-									"/" .. version .. "/identity-attributes/" .. id,
-									"/beta/identity-attributes/" .. id,
-									"identity-attributes",
-									id
-								)
-							elseif type == "apps" then
-								vim.cmd("SPIRaw /" .. version .. "/source-apps/" .. id)
-							elseif type == "identities" then
-								vim.cmd("SPIRaw /" .. version .. "/identities/" .. id)
-							elseif type == "campaigns" then
-								vim.cmd("SPIRaw /" .. version .. "/campaigns/" .. id)
-							else
-								print("Not implemented.")
-							end
+							M.open_resource(type, id)
 						end
 
 						actions.select_default:replace(open_selection)
@@ -534,7 +763,7 @@ function M.setup(opts)
 		vim.fn.jobstart(cmd, {
 			on_exit = function(_, code)
 				if code == 0 then
-					print("SailPoint: Installation succeeded! Restart Neovim.")
+					print("SailPoint: Backend installed! Restart Neovim.")
 				else
 					print("SailPoint: Installation failed.")
 				end
@@ -552,17 +781,10 @@ function M.setup(opts)
 		end
 	end, { nargs = "?" })
 
-	vim.api.nvim_create_user_command("SetSail", function(opts)
-		local arg = (opts.args or ""):lower()
-
-		vim.defer_fn(function()
-			if arg == "" then
-				pick_resource_type({ fullscreen = true })
-			else
-				sailpoint_telescope(arg, nil, { fullscreen = true })
-			end
-		end, 0)
-	end, { nargs = "?" })
+	vim.api.nvim_create_user_command("SetSail", function()
+		load_resource_types()
+		M.setup_sidebar_buffer()
+	end, {})
 
 	vim.api.nvim_create_user_command("SailPointAdd", function(opts)
 		local args = vim.split(opts.args or "", " ")

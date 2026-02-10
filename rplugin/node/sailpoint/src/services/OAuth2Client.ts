@@ -2,7 +2,6 @@ import axios, { AxiosInstance } from "axios";
 import { configureAxios } from "./AxiosHandlers";
 import { USER_AGENT, USER_AGENT_HEADER } from "./ISCClient";
 
-// Represents an OAuth2 access token and its associated metadata.
 export class AccessToken {
     private readonly access_token: string;
     private readonly token_type: string;
@@ -17,12 +16,10 @@ export class AccessToken {
     private readonly strong_auth: boolean;
     private readonly jti: string;
 
-    // Returns the raw access token string.
     public get accessToken(): string {
         return this.access_token;
     }
     
-    // Returns the expiration date of the token.
     public get expiresIn(): Date {
         const expires = new Date();
         expires.setSeconds(expires.getSeconds() + this.expires_in);
@@ -30,12 +27,10 @@ export class AccessToken {
     }
 }
 
-// Client for handling OAuth2 authentication flows with SailPoint.
 export class OAuth2Client {
 
     private static axiosInstances: Map<string, AxiosInstance> = new Map();
 
-    // Initializes the client with credentials and the token endpoint.
     constructor(
         private clientId: string,
         private clientSecret: string,
@@ -44,7 +39,6 @@ export class OAuth2Client {
 
     }
 
-    // Exchanges client credentials for a new OAuth2 access token.
     public async getAccessToken(): Promise<AccessToken> {
         const params = new URLSearchParams({
             "grant_type": "client_credentials",

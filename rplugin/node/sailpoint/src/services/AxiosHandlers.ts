@@ -20,22 +20,10 @@ export const configureAxios = (instance: AxiosInstance) => {
         shouldResetTimeout: true
     });
 
-    instance.interceptors.request.use(onRequest);
-    instance.interceptors.response.use(onResponse, (e) => onErrorResponse(e, instance));
+    instance.interceptors.response.use(undefined, (e) => onErrorResponse(e, instance));
     return instance;
 };
 
-// Axios request interceptor (passthrough).
-export const onRequest = (request: InternalAxiosRequestConfig): InternalAxiosRequestConfig => {
-    return request;
-};
-
-// Axios response interceptor (passthrough).
-export const onResponse = (response: AxiosResponse): AxiosResponse => {
-    return response;
-};
-
-// Global error handler for Axios requests, providing detailed error logging and user notifications.
 export const onErrorResponse = async (error: any, instance: AxiosInstance) => {
     const config = error.config || error.response?.config;
     

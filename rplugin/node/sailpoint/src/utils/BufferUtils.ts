@@ -1,20 +1,14 @@
 import { Neovim } from 'neovim';
 
-/**
- * Utility for managing Neovim buffers and displaying SailPoint resources.
- */
 export class BufferUtils {
     constructor(private readonly nvim: Neovim) {}
 
-    /**
-     * Opens a new tab with a JSON buffer containing the specified resource.
-     */
     public async openBuffer(name: string, content: any, type: string, id: string, original?: any): Promise<void> {
         if (!content || (typeof content === 'object' && Object.keys(content).length === 0 && !Array.isArray(content))) {
             this.nvim.errWrite(`SailPoint: Warning - Received empty content for ${name || id}\n`);
         }
-        
-        await this.nvim.command('tabnew');
+
+        await this.nvim.command('enew');
         const buffer = await this.nvim.buffer;
         await buffer.setOption('buftype', 'acwrite');
         await buffer.setOption('filetype', 'json');

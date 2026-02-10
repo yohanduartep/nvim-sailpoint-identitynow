@@ -28,6 +28,8 @@ Icon
 rplugin/node/sailpoint/dist/
 rplugin/node/sailpoint/node_modules/
 rplugin/node/sailpoint/test/
+*.test.ts
+*.spec.ts
 coverage/
 *.lcov
 .jest/

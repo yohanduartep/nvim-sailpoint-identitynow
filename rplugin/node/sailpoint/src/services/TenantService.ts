@@ -1,10 +1,6 @@
 import { Memento, SecretStorage } from "../vscode";
 import { TenantCredentials, TenantInfo, TenantToken } from "../models/TenantInfo";
-import { compareByName } from "../utils";
-import { isEmpty } from '../utils/stringUtils';
-import { Subject } from "./Subject";
-import { Observer } from "./Observer";
-import { EventEmitter } from 'events';
+import { compareByName, isEmpty } from "../utils";
 import { FolderTreeNode, isFolderTreeNode, isTenantInfo } from "../models/TreeNode";
 
 const SECRET_PAT_PREFIX = "IDENTITYNOW_SECRET_PAT_";
@@ -13,13 +9,11 @@ const TENANT_PREFIX = "IDENTITYNOW_TENANT_";
 const ALL_TENANTS_KEY = "IDENTITYNOW_TENANTS";
 const TREE_KEY = "IDENTITYNOW_TREE";
 
-// Enum representing the types of events emitted by the TenantService.
 export enum TenantServiceEventType {
     removeTenant = "REMOVE_TENANT",
     updateTree = "UPDATE_TREE", 
 }
 
-// Internal helper function to search through the tenant/folder tree structure.
 function findInTree<T extends (FolderTreeNode | TenantInfo)>(
     items: Array<FolderTreeNode | TenantInfo>,
     predicate: (item: FolderTreeNode | TenantInfo) => boolean,
@@ -57,30 +51,13 @@ function findInTree<T extends (FolderTreeNode | TenantInfo)>(
     return results;
 }
 
-// Service for managing SailPoint tenants, folders, and their associated credentials.
-export class TenantService implements Subject<TenantServiceEventType, any> {
+export class TenantService {
 
-    private readonly eventEmitter = new EventEmitter();
+    private readonly accessTokenCache = new Map<string, TenantToken>();
+    private readonly credentialsCache = new Map<string, TenantCredentials>();
 
-    // Initializes the service with storage and secret storage mechanisms.
     constructor(private storage: Memento, private readonly secretStorage: SecretStorage,) { }
 
-    // Registers an observer for a specific service event.
-    public registerObserver(t: TenantServiceEventType, o: Observer<TenantServiceEventType, any>): void {
-        this.eventEmitter.on(t, o.update)
-    }
-
-    // Removes an observer for a specific service event.
-    public removeObserver(t: TenantServiceEventType, o: Observer<TenantServiceEventType, any>): void {
-        this.eventEmitter.removeListener(t, o.update);
-    }
-
-    // Notifies all registered observers about an event.
-    public notifyObservers(t: TenantServiceEventType, message: any): void | Promise<void> {
-        this.eventEmitter.emit(t, message)
-    }
-
-    // Retrieves tenant information using the legacy flat storage format.
     private getTenantOld(key: string): TenantInfo | undefined {
         const tenantInfo = this.storage.get<TenantInfo>(TENANT_PREFIX + key);
         if (!tenantInfo) {
@@ -104,7 +81,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         return tenantInfo;
     }
 
-    // Migrates legacy flat tenant storage into the new tree structure.
     private migrateData(): TenantInfo[] {
         let tenants = this.storage.get<string[]>(ALL_TENANTS_KEY);
         if (tenants === undefined) {
@@ -114,11 +90,9 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         let tenantInfoItems = tenants.map(key => this.getTenantOld(key)).filter((t): t is TenantInfo => !!t);
 
         this.storage.update(TREE_KEY, tenantInfoItems)
-        this.notifyObservers(TenantServiceEventType.updateTree, {})
         return tenantInfoItems
     }
 
-    // Returns the top-level nodes of the tenant tree.
     public getRoots(): Array<TenantInfo | FolderTreeNode> {
         let roots = this.storage.get<Array<TenantInfo | FolderTreeNode>>(TREE_KEY);
         if (roots === undefined) {
@@ -132,7 +106,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         return roots
     }
 
-    // Creates or updates a node within a specific folder or at the root level.
     public createOrUpdateInFolder(item: TenantInfo | FolderTreeNode, parentId?: string) {
         if (parentId) {
             const parent = this.getFolder(parentId)
@@ -149,11 +122,9 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
             const roots = this.getRoots()
             roots.push(item)
             this.storage.update(TREE_KEY, roots)
-            this.notifyObservers(TenantServiceEventType.updateTree, {})
         }
     }
 
-    // Retrieves a flat list of all tenants across the entire tree.
     public getTenants(): TenantInfo[] {
         let roots = this.getRoots()
         let tenants = findInTree<TenantInfo>(
@@ -168,7 +139,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         return tenants;
     }
 
-    // Finds a specific node (tenant or folder) by its unique ID.
     public getNode(key: string): FolderTreeNode | TenantInfo | undefined {
         let roots = this.getRoots()
 
@@ -181,7 +151,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         return folder;
     }
 
-    // Retrieves a specific folder node by its ID.
     public getFolder(key: string): FolderTreeNode | undefined {
         let roots = this.getRoots()
 
@@ -194,7 +163,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         return folder;
     }
 
-    // Retrieves a specific tenant node by its ID and ensures required properties are set.
     public getTenant(key: string): TenantInfo | undefined {
         let roots = this.getRoots()
 
@@ -221,7 +189,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         return tenantInfo;
     }
 
-    // Retrieves a tenant node searching specifically by the tenant's hostname/name.
     public async getTenantByTenantName(tenantName: string): Promise<TenantInfo | undefined> {
 
         let roots = this.getRoots()
@@ -240,7 +207,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         throw new Error("More than 1 tenant found for " + tenantName);
     }
 
-    // Updates an existing node in the tree or adds it to the root if not found.
     public updateOrCreateNode(value: TenantInfo | FolderTreeNode) {
         let items = this.getRoots()
         const id = value.id
@@ -287,10 +253,8 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         }
 
         this.storage.update(TREE_KEY, items);
-        this.notifyObservers(TenantServiceEventType.updateTree, {})
     }
 
-    // Removes a node from the tree and optionally deletes its associated credentials.
     public async removeNode(id: string, removeCredentials = true): Promise<boolean> {
         let roots = this.getRoots()
         let removed = false
@@ -331,7 +295,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
 
         if (removed) {
             this.storage.update(TREE_KEY, roots);
-            this.notifyObservers(TenantServiceEventType.updateTree, {})
 
             if (removeCredentials) {
                 await this.removeTenantCredentials(id);
@@ -341,7 +304,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         return removed
     }
 
-    // Returns the children of a specific folder node.
     public getChildren(id: string) {
         const node = this.getNode(id)
         if (node && isFolderTreeNode(node)) {
@@ -350,7 +312,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         return undefined
     }
 
-    // Moves a node from its current location to a new target folder or to the root.
     public move(nodeIdToMove: string, targetFolderId?: string) {
         const items = this.getRoots()
         let nodeToMove: FolderTreeNode | TenantInfo | undefined;
@@ -402,7 +363,6 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         if (!targetFolderId) {
             items.push(nodeToMove);
             this.storage.update(TREE_KEY, items);
-            this.notifyObservers(TenantServiceEventType.updateTree, {})
             return;
         }
 
@@ -439,10 +399,8 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
             items.push(nodeToMove);
         }
         this.storage.update(TREE_KEY, items);
-        this.notifyObservers(TenantServiceEventType.updateTree, {})
     }
 
-    // Removes a folder and all its contents (including child tenants and their credentials) recursively.
     public async removeFolderRecursively(id: string) {
         const folder = this.getFolder(id)
         if (!folder) return;
@@ -464,29 +422,36 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         this.removeNode(folder.id, false)
     }
 
-    // Retrieves the stored Personal Access Token (PAT) credentials for a tenant.
     public async getTenantCredentials(tenantId: string): Promise<TenantCredentials | undefined> {
+        const cached = this.credentialsCache.get(tenantId);
+        if (cached) {
+            return cached;
+        }
         const credentialsStr = await this.secretStorage.get(this.getPatKey(tenantId));
         if (credentialsStr === undefined) {
             return undefined;
         }
         const credentials = JSON.parse(credentialsStr) as TenantCredentials;
+        this.credentialsCache.set(tenantId, credentials);
         return credentials;
     }
 
-    // Persists the Personal Access Token (PAT) credentials for a tenant in secret storage.
     public async setTenantCredentials(tenantId: string, credentials: TenantCredentials) {
+        this.credentialsCache.set(tenantId, credentials);
         await this.secretStorage.store(this.getPatKey(tenantId), JSON.stringify(credentials));
     }
 
-    // Deletes the stored Personal Access Token (PAT) credentials for a tenant.
     public async removeTenantCredentials(tenantId: string) {
+        this.credentialsCache.delete(tenantId);
         const key = this.getPatKey(tenantId);
         await this.removeSecretKeyIfExists(key);
     }
 
-    // Retrieves the cached access token for a specific tenant.
     public async getTenantAccessToken(tenantId: string): Promise<TenantToken | undefined> {
+        const cached = this.accessTokenCache.get(tenantId);
+        if (cached) {
+            return cached;
+        }
         const tokenStr = await this.secretStorage.get(this.getAccessTokenKey(tenantId)) || "";
         let token: TenantToken | undefined = undefined;
         if (!isEmpty(tokenStr)) {
@@ -499,6 +464,7 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
                         clientId: tokenJson.client.clientId,
                         clientSecret: tokenJson.client.clientSecret
                     });
+                this.accessTokenCache.set(tenantId, token);
             } catch (err) {
                 console.log("WARNING: could not parse Token: ", err);
             }
@@ -508,32 +474,29 @@ export class TenantService implements Subject<TenantServiceEventType, any> {
         return token;
     }
 
-    // Caches a tenant's access token in secret storage.
     public async setTenantAccessToken(tenantId: string, token: TenantToken) {
+        this.accessTokenCache.set(tenantId, token);
         await this.secretStorage.store(
             this.getAccessTokenKey(tenantId),
             JSON.stringify(token));
     }
 
-    // Deletes a tenant's cached access token.
     public async removeTenantAccessToken(tenantId: string) {
+        this.accessTokenCache.delete(tenantId);
         const key = this.getAccessTokenKey(tenantId);
         await this.removeSecretKeyIfExists(key);
     }
 
-    // Returns the internal storage key for a tenant's PAT credentials.
     private getPatKey(tenantId: string): string {
         return SECRET_PAT_PREFIX
             + tenantId;
     }
 
-    // Returns the internal storage key for a tenant's cached access token.
     private getAccessTokenKey(tenantId: string): string {
         return SECRET_AT_PREFIX
             + tenantId;
     }
 
-    // Internal helper to safely delete a key from secret storage if it exists.
     private async removeSecretKeyIfExists(key: string) {
         const secret = await this.secretStorage.get(key);
         if (secret !== undefined) {

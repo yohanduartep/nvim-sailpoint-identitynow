@@ -15,11 +15,13 @@ export class TenantCommands {
         const [name, prefix, clientId, clientSecret, domainArg] = args;
         const domain = domainArg || 'identitynow.com';
         const tenantName = `${prefix}.api.${domain}`;
+        const tempId = `temp-${Date.now()}`;
+        let tempCreated = false;
         try {
             this.nvim.outWrite(`SailPoint: Adding tenant ${name} (${tenantName})...
 `);
-            const tempId = `temp-${Date.now()}`;
             await this.tenantService.updateOrCreateNode({ id: tempId, tenantName, name, type: "TENANT", readOnly: false, authenticationMethod: AuthenticationMethod.personalAccessToken });
+            tempCreated = true;
             await this.tenantService.setTenantCredentials(tempId, { clientId, clientSecret });
             const session = await SailPointISCAuthenticationProvider.getInstance().createSession(tempId);
             
@@ -32,6 +34,7 @@ export class TenantCommands {
             }
             const finalId = `${prefix}-${detectedVersion}`;
             await this.tenantService.removeNode(tempId);
+            tempCreated = false;
             await this.tenantService.updateOrCreateNode({ id: finalId, tenantName, name: name, type: "TENANT", readOnly: false, authenticationMethod: AuthenticationMethod.personalAccessToken, version: detectedVersion });
             await this.tenantService.setTenantCredentials(finalId, { clientId, clientSecret });
             this.nvim.outWrite(`Successfully configured ${name} (ID: ${finalId})
@@ -39,6 +42,10 @@ export class TenantCommands {
             await this.nvim.command("SPIPrefetchAll");
         } catch (e: any) {
             handleError(this.nvim, e, 'adding tenant');
+        } finally {
+            if (tempCreated) {
+                await this.tenantService.removeNode(tempId);
+            }
         }
     }
 

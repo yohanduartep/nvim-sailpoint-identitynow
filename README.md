@@ -12,6 +12,60 @@ I was motivated to create this plugin because I found no tool for Neovim equival
 - **Debugging Suite**: Internal commands (`:SPI*`) for raw API access, VA cluster connectivity diagnostics, and dry-runs.
 - **Secure Storage**: Personal Access Tokens (PAT) are stored via **keytar** (system keychain), ensuring credentials are never saved in plain text.
 
+### Core Functionalities
+
+- **Tenant Management**: Add, remove, and switch between multiple SailPoint Identity Security Cloud tenants.
+- **Resource Editing**: View and edit Sources, Transforms, Roles, Access Profiles, Workflows, and Connector Rules directly in Neovim buffers.
+- **Saving**: Detection of Create vs. Update vs. Patch (JSON Patch) operations based on resource type and state.
+- **Caching**: Connection pooling and pre-fetching of resources for a responsive UI.
+- **Developer Tools**: Dry-run capabilities to see raw API calls and JSON patch previews before committing changes.
+- **Interactivity**: Integrated with Neovim's native input and list selection systems.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center">
+      <b>:SetSail view</b><br>
+      <img src="./screenshots/set_sail.png" alt="No Tenant Registered" width="400"><br>
+    </td>
+    <td align="center">
+      <b>:SailPoint view</b><br>
+      <img src="./screenshots/tenant_01.png" alt="Tenant Registered" width="400"><br>
+    </td>
+  </tr>
+</table>
+
+![Access Profiles](./screenshots/access_profiles.png)
+_View showing available access profiles for a registered tenant._
+
+![Identities](./screenshots/identities.png)
+_View showing identities for a registered tenant._
+
+![Identity Attributes](./screenshots/identity_attributes.png)
+_View showing identity attributes._
+
+![Identity Profiles](./screenshots/identity_profiles.png)
+_View showing identity profiles._
+
+![Roles](./screenshots/roles.png)
+_View showing roles for a registered tenant._
+
+![Rules](./screenshots/rules.png)
+_View showing connector rules._
+
+![Search Attribute](./screenshots/search_attribute.png)
+_View showing search attributes._
+
+![Sources](./screenshots/sources.png)
+_View showing sources for a registered tenant._
+
+![Transforms](./screenshots/transforms.png)
+_View showing transforms for a registered tenant._
+
+![Workflows](./screenshots/workflows.png)
+_View showing workflows for a registered tenant._
+
 ## Dependencies
 
 ### System Binaries
@@ -50,7 +104,6 @@ I was motivated to create this plugin because I found no tool for Neovim equival
     - Run :SPIInstall within Neovim.
     - Run :UpdateRemotePlugins.
     - Restart Neovim.
-    - Run :checkhealth sailpoint
 
 ## Command Reference
 
@@ -84,19 +137,22 @@ I was motivated to create this plugin because I found no tool for Neovim equival
 
 This plugin handles sensitive Personal Access Token (PAT) credentials. They are stored securely in your operating system's keychain (e.g., Windows Credential Manager, macOS Keychain, or libsecret on Linux) via **keytar**. This ensures your credentials are never stored in plain text on your file system.
 
-## License
+---
 
-MIT
+## Changelog
+
+### [0.0.2] - 2026-02-09
+
+- **Unified Resource Architecture**: Centralized resource definitions in `resources.ts` to drive both backend logic and frontend UI.
+- **Dynamic Lua Frontend**: Refactored the sidebar and Telescope pickers to load definitions dynamically from the TypeScript backend, eliminating drift.
+- **Codebase Sanitization**: Purged unused utility modules redundant models to improve maintainability and performance.
+- **Critical Bug Fixes**: Corrected `init.lua` command registration scoping and fixed URL/session generation in `SPIDryRun`.
+- **Enhanced Error Handling**: Improved Axios interceptors for better error parsing and robust session lifecycle management.
+
+### [0.0.1] - 2026-02-06
+
+- Initial prototype featuring basic resource browsing, editing, and tenant management.
 
 ---
 
-**Version v0.0.1**
-
-### Core Functionalities
-
-- **Tenant Management**: Add, remove, and switch between multiple SailPoint Identity Security Cloud tenants.
-- **Resource Editing**: View and edit Sources, Transforms, Roles, Access Profiles, Workflows, and Connector Rules directly in Neovim buffers.
-- **Saving**: Detection of Create vs. Update vs. Patch (JSON Patch) operations based on resource type and state.
-- **Caching**: Connection pooling and pre-fetching of resources for a responsive UI.
-- **Developer Tools**: Dry-run capabilities to see raw API calls and JSON patch previews before committing changes.
-- **Interactivity**: Integrated with Neovim's native input and list selection systems.
+**Version v0.0.2**

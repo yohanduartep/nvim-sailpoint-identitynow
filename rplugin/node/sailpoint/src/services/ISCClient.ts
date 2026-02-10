@@ -20,8 +20,7 @@ import { DEFAULT_PUBLIC_IDENTITIES_QUERY_PARAMS } from '../models/PublicIdentity
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { DEFAULT_ACCESSPROFILES_QUERY_PARAMS } from "../models/AccessProfiles";
 import { DEFAULT_ROLES_QUERY_PARAMS } from "../models/Roles";
-import { addQueryParams } from "../utils/UriUtils";
-import { configureAxios, onErrorResponse, onRequest, onResponse } from "./AxiosHandlers";
+import { configureAxios, onErrorResponse } from "./AxiosHandlers";
 
 const FormData = require('form-data');
 const CONTENT_TYPE_HEADER = "Content-Type";
@@ -32,7 +31,6 @@ const CONTENT_TYPE_JSON = "application/json";
 const CONTENT_TYPE_FORM_JSON_PATCH = "application/json-patch+json";
 const DEFAULT_PAGINATION = 250;
 
-// Client for interacting with SailPoint ISC APIs with tenant-specific versioning.
 export class ISCClient {
 
     private static axiosInstances: Map<string, AxiosInstance> = new Map();
@@ -47,34 +45,32 @@ export class ISCClient {
         private readonly version: string = 'v3'
 	) { }
 
-    // Returns the correct Sources API class based on detected version.
     private getSourcesApi(config: Configuration): any {
         if (this.version === 'v2025') return new SourcesV2025Api(config, undefined, this.getAxiosWithInterceptors());
         return new SourcesApi(config, undefined, this.getAxiosWithInterceptors());
     }
 
-    // Returns the correct Workflows API class based on detected version.
     private getWorkflowsApi(config: Configuration): any {
         if (this.version === 'v2025') return new WorkflowsV2025Api(config, undefined, this.getAxiosWithInterceptors());
         return new WorkflowsApi(config, undefined, this.getAxiosWithInterceptors());
     }
 
-    // Returns the correct Roles API class based on detected version.
     private getRolesApi(config: Configuration): any {
         if (this.version === 'v2025') return new RolesV2025Api(config, undefined, this.getAxiosWithInterceptors());
         return new RolesApi(config, undefined, this.getAxiosWithInterceptors());
     }
 
-    // Returns the correct Access Profiles API class based on detected version.
     private getAccessProfilesApi(config: Configuration): any {
         if (this.version === 'v2025') return new AccessProfilesV2025Api(config, undefined, this.getAxiosWithInterceptors());
         return new AccessProfilesApi(config, undefined, this.getAxiosWithInterceptors());
     }
 
-	// Prepares SDK configuration for the current tenant.
 	private async getApiConfiguration(accessToken?: string): Promise<Configuration> {
 		if (!accessToken) {
-			const session = await SailPointISCAuthenticationProvider.getInstance().getSessionByTenant(this.tenantId)
+	const session = await SailPointISCAuthenticationProvider.getInstance().getSessionByTenant(this.tenantId)
+	if (!session?.accessToken) {
+		throw new Error('No valid session for tenant');
+	}
 			accessToken = session?.accessToken
 		}
 		const apiConfig = new Configuration({
@@ -86,7 +82,6 @@ export class ISCClient {
 		return apiConfig;
 	}
 
-	// Returns an Axios instance with interceptors (cached).
 	private getAxiosWithInterceptors(): AxiosInstance {
         const key = `sdk-${this.tenantId}-${this.tenantName}`;
         let instance = ISCClient.axiosInstances.get(key);
@@ -99,9 +94,10 @@ export class ISCClient {
 		return instance;
 	}
 
-	// Returns a pre-authenticated Axios instance (cached).
 	private async getAxios(contentType = CONTENT_TYPE_JSON): Promise<AxiosInstance> {
 		const session = await SailPointISCAuthenticationProvider.getInstance().getSessionByTenant(this.tenantId)
+        if (!session?.accessToken) throw new Error('No valid session for tenant');
+
         const key = `raw-${this.tenantId}-${this.tenantName}-${contentType}`;
         let instance = ISCClient.axiosInstances.get(key);
         
@@ -114,7 +110,6 @@ export class ISCClient {
             ISCClient.axiosInstances.set(key, instance);
         }
         
-        // Update authorization header in case token refreshed
         instance.defaults.headers.common["Authorization"] = `Bearer ${session?.accessToken}`;
 		return instance;
 	}
@@ -158,6 +153,10 @@ export class ISCClient {
 		const api = new TransformsApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
 		const resp = await api.listTransforms({ filters: `name eq "${name}"`, count: true });
 		return resp.data[0];
+	}
+
+	public async getTransformById(id: string): Promise<Transform> {
+		return (await (await this.getAxios()).get(`/${this.version}/transforms/${id}`)).data;
 	}
 
 	public async getResource(path: string): Promise<any> {

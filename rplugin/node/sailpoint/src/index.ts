@@ -10,11 +10,10 @@ import { TenantCommands } from './commands/TenantCommands';
 import { ResourceFetcher } from './commands/ResourceFetcher';
 import { ResourceCommands } from './commands/ResourceCommands';
 import { handleError } from './errors';
+import { ALL_RESOURCE_TYPES, RESOURCE_CACHE_PREFIX, ACTIVE_TENANT_ID_KEY } from './constants';
+import { RESOURCE_DEFINITIONS } from './resources';
 
 let activeTenantIndex = 0;
-const ACTIVE_TENANT_ID_KEY = 'sailpoint.activeTenantId';
-const RESOURCE_CACHE_PREFIX = 'sailpoint.cache.';
-const ALL_RESOURCE_TYPES = ['tenants', 'sources', 'transforms', 'rules', 'workflows', 'access-profiles', 'roles', 'apps', 'identities', 'campaigns', 'service-desk', 'identity-profiles', 'forms', 'search-attributes', 'identity-attributes'];
 
 export default function(plugin: NvimPlugin) {
     setNvim(plugin.nvim);
@@ -35,6 +34,10 @@ export default function(plugin: NvimPlugin) {
     const tenantCommands = new TenantCommands(plugin.nvim, tenantService);
     const resourceFetcher = new ResourceFetcher(tenantService);
     const resourceCommands = new ResourceCommands(plugin.nvim, bufferUtils);
+
+    plugin.registerFunction('SailPointGetResourceDefinitions', () => {
+        return RESOURCE_DEFINITIONS;
+    }, { sync: true });
 
     const initializeActiveTenant = () => {
         const tenants = tenantService.getTenants();
@@ -62,7 +65,8 @@ export default function(plugin: NvimPlugin) {
         const tenant = tenants[activeTenantIndex];
         return {
             client: new ISCClient(tenant.id!, tenant.tenantName!, tenant.version || 'v3'),
-            tenantName: tenant.name,
+            tenantName: tenant.tenantName,
+            displayName: tenant.name,
             tenantId: tenant.id,
             version: tenant.version || 'v3'
         };
@@ -199,8 +203,8 @@ export default function(plugin: NvimPlugin) {
             const lines = await buffer.getLines({ start: 0, end: -1, strictIndexing: false });
             const newContent = JSON.parse(lines.join('\n'));
             const patchOps = fastJsonPatch.compare(JSON.parse(originalStr || '{}'), newContent);
-            const { tenantName } = getClient();
-            const session = await SailPointISCAuthenticationProvider.getInstance().getSessionByTenant(tenantName);
+            const { tenantName, tenantId } = getClient();
+            const session = await SailPointISCAuthenticationProvider.getInstance().getSessionByTenant(tenantId!);
             const token = session?.accessToken || "TOKEN";
             let output = [`# Dry Run for ${type} ${id}`, "", `# PATCH (v3)`, `curl -X PATCH "https://${tenantName}/${type}s/${id}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json-patch+json" -d '${JSON.stringify(patchOps)}'`, "", `# PUT (Mock Style)`, `curl -X PUT "https://${tenantName}/${type}s/${id}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '${JSON.stringify(newContent)}'`];
             await bufferUtils.openBuffer('dry_run', output, 'debug', 'dry_run');

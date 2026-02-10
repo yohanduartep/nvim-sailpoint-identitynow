@@ -41,10 +41,25 @@ export class ResourceCommands {
     public async getTransform(args: any[], getClient: () => { client: ISCClient }): Promise<void> {
         try { 
             const { client } = getClient(); 
-            const t = await client.getTransformByName(args[0]); 
+            const input = String(args[0] || '');
+            const looksLikeId = /^[0-9a-fA-F-]{20,}$/.test(input);
+            let t: any;
+            if (looksLikeId) {
+                try {
+                    t = await client.getTransformById(input);
+                } catch (e) {
+                    t = undefined;
+                }
+            }
+            if (!t) {
+                t = await client.getTransformByName(input);
+            }
+            if (!t) {
+                throw new Error(`Transform not found: ${input}`);
+            }
             // Transform usually uses 'name' as ID, id might be undefined in type def but present in API.
             // Using name or casting to any to access id if needed, but SDK says no ID.
-            await this.bufferUtils.openBuffer(t.name || 'unnamed', t, 'transform', (t as any).id || args[0], t); 
+            await this.bufferUtils.openBuffer(t.name || 'unnamed', t, 'transform', (t as any).id || input, t); 
         }
         catch (e) { handleError(this.nvim, e, 'getting transform'); }
     }
