@@ -290,25 +290,13 @@ nvim-sailpoint-identitynow/
 
 ### [0.0.3] - 2026-02-17
 
-**Performance & Reliability**
-
-- **Peak Velocity Fetch**: Optimized fetch pipeline with parallel batching (3x faster)
-    - Accounts: 3 sources in parallel
-    - Small resources: 8 simultaneous fetches
-    - 5-minute cache TTL for instant subsequent fetches
 - **Auto-Fetch**: Resources automatically fetch after tenant add
 - **Smart Cache Loading**: Auto-loads cached resources on sidebar open (instant startup)
 - **Lazy Background Fetch**: Only fetches modified resources or 24h+ old data
-
-**User Experience**
-
 - **Clean Progress Tracking**: Unified "Fetching... X/Y resources" counter
 - **Search Completion**: Shows "Search complete - Found X results" message
 - **Debug Mode**: Toggle verbose logging with `:SPIDebug`
 - **Better Error Messages**: Clear feedback for 404s and API issues
-
-**Technical Improvements**
-
 - Smart cache-first approach (checks local before API)
 - Timestamp-based cache freshness tracking
 - Optimized progress display (no spam during parallel fetches)
