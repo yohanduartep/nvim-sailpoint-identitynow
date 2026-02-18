@@ -1,4 +1,4 @@
-import { ALL_RESOURCE_TYPES } from './resources';
+import { ALL_RESOURCE_TYPES } from './resourceRegistry';
 
 export { ALL_RESOURCE_TYPES };
 export const RESOURCE_CACHE_PREFIX = 'sailpoint.cache.';

@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import { configureAxios } from "./AxiosHandlers";
-import { USER_AGENT, USER_AGENT_HEADER } from "./ISCClient";
+import { USER_AGENT, USER_AGENT_HEADER } from "./ISCClientBase";
 
 export class AccessToken {
     private readonly access_token: string;

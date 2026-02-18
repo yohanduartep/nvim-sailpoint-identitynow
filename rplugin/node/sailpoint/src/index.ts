@@ -1,9 +1,8 @@
 import { NvimPlugin } from 'neovim';
-import { setNvim, globalStorage, secretStorage } from './vscode';
+import { setNvim, globalStorage, secretStorage, tenantCache } from './vscode';
 import { TenantService } from './services/TenantService';
 import { ISCClient } from './services/ISCClient';
 import { SailPointISCAuthenticationProvider } from './services/AuthenticationProvider';
-import * as fastJsonPatch from 'fast-json-patch';
 import { BufferUtils } from './utils/BufferUtils';
 import { SaveCommand } from './commands/SaveCommand';
 import { TenantCommands } from './commands/TenantCommands';
@@ -11,9 +10,24 @@ import { ResourceFetcher } from './commands/ResourceFetcher';
 import { ResourceCommands } from './commands/ResourceCommands';
 import { handleError } from './errors';
 import { ALL_RESOURCE_TYPES, RESOURCE_CACHE_PREFIX, ACTIVE_TENANT_ID_KEY } from './constants';
-import { RESOURCE_DEFINITIONS } from './resources';
+import { getRegistryEntry, RESOURCE_DEFINITIONS } from './resourceRegistry';
+import { registerFetchAllCommands } from './fetchAllOrchestrator';
+import { registerSmartLazyFetch } from './fetchSmartLazy';
+import { registerFetchItemsHandler } from './fetchItemsHandler';
+import { registerDebugCommands, registerResourceAndTenantCommands } from './commandRegistrations';
+import { logWarn } from './services/logger';
+import { sortItems } from './cacheUtils';
 
 let activeTenantIndex = 0;
+let debugMode = false;
+
+export function isDebugMode(): boolean {
+    return debugMode;
+}
+
+export function setDebugMode(enabled: boolean): void {
+    debugMode = enabled;
+}
 
 export default function(plugin: NvimPlugin) {
     setNvim(plugin.nvim);
@@ -50,12 +64,56 @@ export default function(plugin: NvimPlugin) {
     };
 
     const initializeCache = async () => {
+        plugin.nvim.outWrite('SailPoint: Initializing cache...\n');
+        let pruneTtlMs = 7 * 24 * 60 * 60 * 1000; // 7 days
+        try {
+            const pruneTtlDays = await plugin.nvim.getVar('sailpoint_cache_prune_ttl_days');
+            if (typeof pruneTtlDays === 'number' && pruneTtlDays > 0) {
+                pruneTtlMs = Math.floor(pruneTtlDays * 24 * 60 * 60 * 1000);
+            }
+        } catch (e: any) {
+            logWarn(`SailPoint: using default prune TTL (7 days): ${e?.message || String(e)}`);
+        }
+        await tenantCache.pruneOlderThan(pruneTtlMs);
+
+        const tenants = tenantService.getTenants();
+        plugin.nvim.outWrite(`SailPoint: Found ${tenants.length} tenant(s)\n`);
+        if (tenants.length === 0) return;
+        initializeActiveTenant();
+        const activeTenant = tenants[activeTenantIndex];
+        const tenantId = activeTenant.id!;
+        plugin.nvim.outWrite(`SailPoint: Active tenant: ${tenantId}\n`);
+
+        let loadedCount = 0;
         for (const type of ALL_RESOURCE_TYPES) {
-            const cachedItems = globalStorage.get<any[]>(RESOURCE_CACHE_PREFIX + type);
-            if (cachedItems) {
-                await plugin.nvim.executeLua('SailPointUpdateCache(...)', [type, cachedItems, '']);
+            const policy = getRegistryEntry(type)?.cachePolicy || 'default';
+            if (policy === 'accounts') {
+                const summary = globalStorage.get<Record<string, unknown>[]>(`${tenantId}_accounts_summary`);
+                const total = globalStorage.get<number>(`${tenantId}_accounts_total`) || 0;
+                if (summary && summary.length > 0) {
+                    await plugin.nvim.executeLua('SailPointUpdateCache(...)', ['accounts', { items: summary, totalCount: total }, '']);
+                    loadedCount++;
+                } else {
+                    // No accounts cached yet - initialize with empty sources list
+                    await plugin.nvim.executeLua('SailPointUpdateCache(...)', ['accounts', { items: [], totalCount: 0 }, '']);
+                }
+                continue;
+            }
+            const cachedItems = globalStorage.get<Record<string, unknown>[]>(`${tenantId}_${RESOURCE_CACHE_PREFIX}${type}`);
+            const total = globalStorage.get<number>(`${tenantId}_${RESOURCE_CACHE_PREFIX}${type}_total`) || (cachedItems ? cachedItems.length : 0);
+            if (cachedItems && cachedItems.length > 0) {
+                // Always sort before sending to Lua
+                const sorted = sortItems(cachedItems);
+                await plugin.nvim.executeLua('SailPointUpdateCache(...)', [type, { items: sorted, totalCount: total }, '']);
+                loadedCount++;
+            } else if (total === 0) {
+                // Initialize empty cache to prevent unnecessary fetches
+                await plugin.nvim.executeLua('SailPointUpdateCache(...)', [type, { items: [], totalCount: 0 }, '']);
+                loadedCount++;
             }
         }
+        
+        plugin.nvim.outWrite(`SailPoint: Loaded ${loadedCount} cached resource types\n`);
     };
 
     const getClient = () => {
@@ -63,17 +121,21 @@ export default function(plugin: NvimPlugin) {
         if (tenants.length === 0) throw new Error('No tenants configured.');
         if (activeTenantIndex >= tenants.length) activeTenantIndex = 0;
         const tenant = tenants[activeTenantIndex];
+        if (!tenant.version) {
+            throw new Error(`Tenant '${tenant.id}' has no API version configured. Re-add or update this tenant configuration.`);
+        }
         return {
-            client: new ISCClient(tenant.id!, tenant.tenantName!, tenant.version || 'v3'),
+            client: new ISCClient(tenant.id!, tenant.tenantName!, tenant.version),
             tenantName: tenant.tenantName,
             displayName: tenant.name,
             tenantId: tenant.id,
-            version: tenant.version || 'v3'
+            version: tenant.version
         };
     };
 
     plugin.registerFunction('SailPointRawWithFallback', async (args: any[]) => {
-        const [primaryPath, fallbackPath, type, id] = args;
+        let [primaryPath, fallbackPath, type, id, matchedField, targetWinId] = args;
+
         try {
             const { client } = getClient();
             let data;
@@ -82,7 +144,15 @@ export default function(plugin: NvimPlugin) {
             } catch (e) {
                 data = await client.getResource(fallbackPath);
             }
-            await bufferUtils.openBuffer(id || 'raw', data, type || 'raw', id || primaryPath, data);
+            await bufferUtils.openBuffer(
+                id || 'raw',
+                data,
+                type || 'raw',
+                id || primaryPath,
+                data,
+                matchedField,
+                typeof targetWinId === 'number' ? targetWinId : undefined
+            );
         } catch (e: any) {
             handleError(plugin.nvim, e, 'fetching ' + (type || 'resource'));
         }
@@ -96,159 +166,76 @@ export default function(plugin: NvimPlugin) {
         return tenants[activeTenantIndex];
     }, { sync: true });
 
-    plugin.registerFunction('SailPointFetchItems', async (args: any[]) => {
-        try { 
-            const tenants = tenantService.getTenants();
-            if (tenants.length > 0 && args[0]?.toLowerCase() !== 'tenants') initializeActiveTenant();
-            return await resourceFetcher.fetchItemsInternal(args[0], getClient, activeTenantIndex, args[1]); 
-        } 
-        catch (e: any) { return []; }
-    }, { sync: true });
+    registerFetchItemsHandler({
+        plugin,
+        tenantService,
+        initializeActiveTenant,
+        getActiveTenantIndex: () => activeTenantIndex,
+        getClient,
+        resourceFetcher,
+        globalStorage,
+        tenantCache
+    });
 
-    plugin.registerCommand('SailPointSave', async () => {
-        await saveCommand.execute(getClient);
-    }, { sync: false });
+    registerResourceAndTenantCommands({
+        plugin,
+        saveCommand,
+        tenantCommands,
+        resourceCommands,
+        bufferUtils,
+        tenantService,
+        getClient,
+        setActiveTenantIndex: (idx) => { activeTenantIndex = idx; },
+        getActiveTenantIndex: () => activeTenantIndex,
+        globalStorage,
+        tenantCache
+    });
 
-    plugin.registerFunction('SPIAddTenant', async (args: any[]) => {
-        await tenantCommands.addTenant(args);
-    }, { sync: false });
+    registerFetchAllCommands({
+        plugin,
+        tenantService,
+        globalStorage,
+        tenantCache,
+        resourceFetcher,
+        getClient,
+        getActiveTenantIndex: () => activeTenantIndex,
+        initializeActiveTenant,
+    });
 
-    plugin.registerFunction('SPIRemoveTenant', async (args: any[]) => { 
-        await tenantCommands.removeTenant(args, ALL_RESOURCE_TYPES, RESOURCE_CACHE_PREFIX, globalStorage);
-    }, { sync: false });
+    registerSmartLazyFetch({
+        plugin,
+        tenantService,
+        globalStorage,
+        tenantCache,
+        resourceFetcher,
+        getClient,
+        getActiveTenantIndex: () => activeTenantIndex,
+        initializeActiveTenant,
+    });
 
-    plugin.registerCommand('SPIPrefetchAll', async () => {
-        initializeActiveTenant();
-        const tenants = tenantService.getTenants();
-        if (tenants.length === 0) {
-            for (const type of ALL_RESOURCE_TYPES) {
-                await plugin.nvim.executeLua('SailPointUpdateCache(...)', [type, [], 'No tenants configured.']);
-                await globalStorage.update(RESOURCE_CACHE_PREFIX + type, null);
-            }
-            return;
-        }
-        for (const type of ALL_RESOURCE_TYPES) {
-            try {
-                const items = await resourceFetcher.fetchItemsInternal(type, getClient, activeTenantIndex);
-                await plugin.nvim.executeLua('SailPointUpdateCache(...)', [type, items, '']);
-                await globalStorage.update(RESOURCE_CACHE_PREFIX + type, items);
-            } catch (e: any) {
-                await plugin.nvim.executeLua('SailPointUpdateCache(...)', [type, null, e.message || String(e)]);
-            }
-        }
-    }, { sync: false });
+    registerDebugCommands({
+        plugin,
+        saveCommand,
+        tenantCommands,
+        resourceCommands,
+        bufferUtils,
+        tenantService,
+        getClient,
+        setActiveTenantIndex: (idx) => { activeTenantIndex = idx; },
+        getActiveTenantIndex: () => activeTenantIndex,
+        globalStorage,
+        tenantCache
+    });
 
-    plugin.registerCommand('SPISwitchTenant', async (args: any[]) => {
-        await tenantCommands.switchTenant(args, async (idx) => {
-            activeTenantIndex = idx;
-            const tenants = tenantService.getTenants();
-            await globalStorage.update(ACTIVE_TENANT_ID_KEY, tenants[idx].id);
-        });
-    }, { sync: true, nargs: '1' });
-
-    plugin.registerCommand('SPIAdd', async (args: any[]) => { await bufferUtils.openBuffer(args[1] || 'New', {}, args[0], '', {}); }, { sync: false, nargs: '*' });
-    
-    plugin.registerCommand('SPIAggregate', async (args: any[]) => {
-        await resourceCommands.aggregate(args, getClient);
-    }, { sync: false, nargs: '*' });
-    
-    plugin.registerCommand('SPIDeleteResource', async (args: any[]) => {
-        await resourceCommands.deleteResource(args, getClient);
-    }, { sync: false, nargs: '1' });
-
-    plugin.registerCommand('SPIGetSource', async (a: any[]) => { 
-        await resourceCommands.getSource(a, getClient);
-    }, { sync: false, nargs: '1' });
-    
-    plugin.registerCommand('SPIGetTransform', async (a: any[]) => { 
-        await resourceCommands.getTransform(a, getClient);
-    }, { sync: false, nargs: '1' });
-    
-    plugin.registerCommand('SPIGetRole', async (a: any[]) => { 
-        await resourceCommands.getRole(a, getClient);
-    }, { sync: false, nargs: '1' });
-    
-    plugin.registerCommand('SPIGetAccessProfile', async (a: any[]) => { 
-        await resourceCommands.getAccessProfile(a, getClient);
-    }, { sync: false, nargs: '1' });
-    
-    plugin.registerCommand('SPIGetConnectorRule', async (a: any[]) => { 
-        await resourceCommands.getConnectorRule(a, getClient);
-    }, { sync: false, nargs: '1' });
-    
-    plugin.registerCommand('SPIGetWorkflow', async (a: any[]) => { 
-        await resourceCommands.getWorkflow(a, getClient);
-    }, { sync: false, nargs: '1' });
-
-    plugin.registerCommand('SPIRaw', async (args: any[]) => { 
-        await resourceCommands.getRaw(args, getClient);
-    }, { sync: false, nargs: '1' });
-    
-    plugin.registerCommand('SPIShowPatch', async () => {
-        const buffer = await plugin.nvim.buffer;
+    // Register manual cache initialization command for debugging
+    plugin.registerCommand('SPIInitCache', async () => {
         try {
-            const originalStr = await buffer.getVar('sailpoint_original') as string;
-            const lines = await buffer.getLines({ start: 0, end: -1, strictIndexing: false });
-            const patch = fastJsonPatch.compare(JSON.parse(originalStr), JSON.parse(lines.join('\n')));
-            await bufferUtils.openBuffer('patch_preview', patch, 'preview', 'patch');
-        } catch(e: any) { handleError(plugin.nvim, e, 'patch preview'); }
-    }, { sync: false });
-
-    plugin.registerCommand('SPIDryRun', async () => {
-        const buffer = await plugin.nvim.buffer;
-        try {
-            const type = await buffer.getVar('sailpoint_type') as string;
-            const id = await buffer.getVar('sailpoint_id') as string;
-            const originalStr = await buffer.getVar('sailpoint_original') as string;
-            const lines = await buffer.getLines({ start: 0, end: -1, strictIndexing: false });
-            const newContent = JSON.parse(lines.join('\n'));
-            const patchOps = fastJsonPatch.compare(JSON.parse(originalStr || '{}'), newContent);
-            const { tenantName, tenantId } = getClient();
-            const session = await SailPointISCAuthenticationProvider.getInstance().getSessionByTenant(tenantId!);
-            const token = session?.accessToken || "TOKEN";
-            let output = [`# Dry Run for ${type} ${id}`, "", `# PATCH (v3)`, `curl -X PATCH "https://${tenantName}/${type}s/${id}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json-patch+json" -d '${JSON.stringify(patchOps)}'`, "", `# PUT (Mock Style)`, `curl -X PUT "https://${tenantName}/${type}s/${id}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '${JSON.stringify(newContent)}'`];
-            await bufferUtils.openBuffer('dry_run', output, 'debug', 'dry_run');
-        } catch(e: any) { handleError(plugin.nvim, e, 'dry run'); }
-    }, { sync: false });
-
-    plugin.registerCommand('SPIDebug', async () => {
-        const tenants = tenantService.getTenants();
-        const active = tenants[activeTenantIndex];
-        const { version } = tenants.length > 0 ? getClient() : { version: 'N/A' };
-        plugin.nvim.outWrite(`Active: ${active?.name || 'None'} (ID: ${active?.id || 'N/A'})\nAPI: ${version}\n`);
-    }, { sync: false });
-
-    plugin.registerCommand('SailPointHelp', async () => {
-        const help = [
-            "SailPoint Neovim Help",
-            "===================",
-            "",
-            "Core:",
-            "- SailPoint: Browser - Open the main resource browser.",
-            "- SetSail: Browser (alias) - Alias for SailPoint.",
-            "- SailPointAdd <type> - Add tenants or create new resources (rules, transforms, etc.).",
-            "- SailPointAggregate <source|entitlements> <id> - Trigger account or entitlement aggregation.",
-            "- SailPointDelete <tenant|resource_path> - Remove a tenant or an API resource.",
-            "- SailPointConfig <exp|imp> [path] - Backup or restore tenant configuration.",
-            "- SailPointSave (:w) - Save the current buffer to the cloud.",
-            "",
-            "Debug (SPI):",
-            "- SPIDebug - Show active tenant and diagnostics.",
-            "- SPIRaw <path> - Fetch raw JSON from an API endpoint.",
-            "- SPIRemoveTenant <id> - Remove a tenant configuration.",
-            "- SPIClone <type> <id> <newName> - Clone a tenant or source.",
-            "- SPIDryRun - Show curl commands for pending changes.",
-            "- SPIShowPatch - Display JSON Patch for pending changes.",
-            "- SPIPrefetchAll - Force refresh of local cache.",
-            "- SPIPingCluster <id> - Check connectivity of VA clusters.",
-            "- SPIInstall - Install backend dependencies."
-        ];
-        await plugin.nvim.command('tabnew');
-        const b = await plugin.nvim.buffer;
-        await b.setOption('buftype', 'nofile');
-        await b.setLines(help, { start: 0, end: -1, strictIndexing: false });
+            await initializeCache();
+        } catch (e: unknown) {
+            plugin.nvim.outWrite(`SailPoint: Cache init error: ${(e as Error)?.message || String(e)}\n`);
+        }
     }, { sync: false });
 
     initializeActiveTenant();
-    initializeCache();
+    // DON'T auto-call initializeCache here - let Lua sidebar call it when ready
 };

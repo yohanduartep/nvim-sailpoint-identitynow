@@ -1,35 +1,55 @@
 # Node.js
 node_modules/
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.npm
-
-# TypeScript/Build
-dist/
-lib/
-out/
 *.tsbuildinfo
 
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-Icon
-._*
+# Build outputs
+dist/
+rplugin/node/sailpoint/dist/
 
-# Editors/IDE
+# Tests
+rplugin/node/sailpoint/test/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+tests/
+coverage/
+
+# Credentials & secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+credentials.json
+secrets.json
+token.json
+.sailpoint/
+tenant-*.json
+*.pat
+
+# System files
+.DS_Store
+Thumbs.db
+*~
+
+# Editor configs
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Project specific
-rplugin/node/sailpoint/dist/
-rplugin/node/sailpoint/node_modules/
-rplugin/node/sailpoint/test/
-*.test.ts
-*.spec.ts
-coverage/
-*.lcov
-.jest/
+# Logs
+*.log
+logs/
+
+# Cache & temp
+*.cache
+.cache/
+*.tmp
+*.temp
+
+# Plugin-specific
+plugin/packer_compiled.lua

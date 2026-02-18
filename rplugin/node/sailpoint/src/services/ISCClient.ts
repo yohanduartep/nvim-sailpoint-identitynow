@@ -1,356 +1,283 @@
-import * as vscode from "../vscode";
-import * as os from 'os';
-import { 
-    Configuration, Paginator, SourcesApi, SourcesV2025Api, TransformsApi, WorkflowsV2025Api, 
-    WorkflowsApi, ConnectorRuleManagementBetaApi, AccountsApi, EntitlementsBetaApi, 
-    PublicIdentitiesApi, SPConfigBetaApi, IdentityProfilesApi, ServiceDeskIntegrationApi, 
-    TaskManagementV2025Api, ManagedClustersBetaApi, CertificationCampaignsV2025Api, 
-    CertificationsV2025Api, CertificationSummariesV2025Api, SearchApi, CustomFormsBetaApi, 
-    AppsBetaApi, SODPoliciesV2024Api, IdentityProfilesV2025Api, RolesV2025Api, RolesApi,
-    AccessProfilesV2025Api, AccessProfilesApi, DimensionsV2025Api, PasswordConfigurationV2025Api, 
-    PasswordManagementBetaApi, IdentitiesBetaApi, ConfigurationHubV2024Api,
-    Search, IndexV2025, IdentityAttributesBetaApi, SearchAttributeConfigurationBetaApi,
+import {
     Source, Transform, Role, AccessProfile, Workflow, ConnectorRuleResponseBeta
 } from 'sailpoint-api-client';
-import { SailPointISCAuthenticationProvider } from "./AuthenticationProvider";
-import { compareByName } from "../utils";
-import { DEFAULT_ACCOUNTS_QUERY_PARAMS } from "../models/Account";
-import { DEFAULT_ENTITLEMENTS_QUERY_PARAMS } from "../models/Entitlements";
-import { DEFAULT_PUBLIC_IDENTITIES_QUERY_PARAMS } from '../models/PublicIdentity';
-import axios, { AxiosInstance, AxiosResponse } from 'axios';
-import { DEFAULT_ACCESSPROFILES_QUERY_PARAMS } from "../models/AccessProfiles";
-import { DEFAULT_ROLES_QUERY_PARAMS } from "../models/Roles";
-import { configureAxios, onErrorResponse } from "./AxiosHandlers";
+import { AxiosResponse } from 'axios';
+import { ISCClientBase } from "./ISCClientBase";
+import { DiscoveryDomain } from "./domains/discoveryDomain";
+import { SourceWorkflowDomain } from "./domains/sourceWorkflowDomain";
+import { IdentityCatalogDomain } from './domains/identityCatalogDomain';
+import { GovernanceDomain } from './domains/governanceDomain';
+import { ResourceDataDomain } from './domains/resourceDataDomain';
+import { AdminConfigDomain } from './domains/adminConfigDomain';
 
-const FormData = require('form-data');
-const CONTENT_TYPE_HEADER = "Content-Type";
-export const USER_AGENT_HEADER = "User-Agent";
-export const USER_AGENT = `Neovim/SailPoint-IdentityNow (Node ${process.version})`;
-export const TOTAL_COUNT_HEADER = "x-total-count";
-const CONTENT_TYPE_JSON = "application/json";
-const CONTENT_TYPE_FORM_JSON_PATCH = "application/json-patch+json";
-const DEFAULT_PAGINATION = 250;
+export class ISCClient extends ISCClientBase {
 
-export class ISCClient {
+    private readonly discoveryDomain: DiscoveryDomain;
+    private readonly sourceWorkflowDomain: SourceWorkflowDomain;
+    private readonly identityCatalogDomain: IdentityCatalogDomain;
+    private readonly governanceDomain: GovernanceDomain;
+    private readonly resourceDataDomain: ResourceDataDomain;
+    private readonly adminConfigDomain: AdminConfigDomain;
 
-    private static axiosInstances: Map<string, AxiosInstance> = new Map();
-
-    public static clearCache() {
-        this.axiosInstances.clear();
+    constructor(tenantId: string, tenantName: string, version: string) {
+        super(tenantId, tenantName, version);
+        this.discoveryDomain = new DiscoveryDomain({
+            tenantId: this.tenantId,
+            version: this.version,
+            getApiConfiguration: () => this.getApiConfiguration(),
+            getAxiosWithInterceptors: () => this.getAxiosWithInterceptors(),
+            getAxios: () => this.getAxios(),
+            fetchAllParallel: (apiCall, onProgress, fields, totalItems) => this.fetchAllParallel(apiCall, onProgress, fields, totalItems)
+        });
+        this.sourceWorkflowDomain = new SourceWorkflowDomain({
+            version: this.version,
+            getApiConfiguration: () => this.getApiConfiguration(),
+            getAxiosWithInterceptors: () => this.getAxiosWithInterceptors(),
+            getApiFor: (kind, config) => this.getApiFor(kind, config),
+            getVersionedPayloadKey: (baseKey) => this.getVersionedPayloadKey(baseKey)
+        });
+        this.identityCatalogDomain = new IdentityCatalogDomain({
+            version: this.version,
+            getApiConfiguration: () => this.getApiConfiguration(),
+            getAxiosWithInterceptors: () => this.getAxiosWithInterceptors(),
+            getAxios: () => this.getAxios()
+        });
+        this.governanceDomain = new GovernanceDomain({
+            getApiConfiguration: () => this.getApiConfiguration(),
+            getAxiosWithInterceptors: () => this.getAxiosWithInterceptors(),
+            getApiFor: (kind, config) => this.getApiFor(kind, config),
+            getVersionedPayloadKey: (baseKey) => this.getVersionedPayloadKey(baseKey)
+        });
+        this.resourceDataDomain = new ResourceDataDomain({
+            version: this.version,
+            getApiConfiguration: () => this.getApiConfiguration(),
+            getAxiosWithInterceptors: () => this.getAxiosWithInterceptors(),
+            getAxios: (contentType) => this.getAxios(contentType)
+        });
+        this.adminConfigDomain = new AdminConfigDomain({
+            getApiConfiguration: () => this.getApiConfiguration(),
+            getAxiosWithInterceptors: () => this.getAxiosWithInterceptors()
+        });
     }
 
-	constructor(
-		private readonly tenantId: string,
-		private readonly tenantName: string,
-        private readonly version: string = 'v3'
-	) { }
-
-    private getSourcesApi(config: Configuration): any {
-        if (this.version === 'v2025') return new SourcesV2025Api(config, undefined, this.getAxiosWithInterceptors());
-        return new SourcesApi(config, undefined, this.getAxiosWithInterceptors());
+    public async listEntitlements(filters?: string, limit?: number): Promise<Record<string, unknown>[]> {
+        return this.resourceDataDomain.listEntitlements(filters, limit);
     }
 
-    private getWorkflowsApi(config: Configuration): any {
-        if (this.version === 'v2025') return new WorkflowsV2025Api(config, undefined, this.getAxiosWithInterceptors());
-        return new WorkflowsApi(config, undefined, this.getAxiosWithInterceptors());
+    public async getEntitlement(id: string): Promise<Record<string, unknown>> {
+        return this.resourceDataDomain.getEntitlement(id);
     }
-
-    private getRolesApi(config: Configuration): any {
-        if (this.version === 'v2025') return new RolesV2025Api(config, undefined, this.getAxiosWithInterceptors());
-        return new RolesApi(config, undefined, this.getAxiosWithInterceptors());
-    }
-
-    private getAccessProfilesApi(config: Configuration): any {
-        if (this.version === 'v2025') return new AccessProfilesV2025Api(config, undefined, this.getAxiosWithInterceptors());
-        return new AccessProfilesApi(config, undefined, this.getAxiosWithInterceptors());
-    }
-
-	private async getApiConfiguration(accessToken?: string): Promise<Configuration> {
-		if (!accessToken) {
-	const session = await SailPointISCAuthenticationProvider.getInstance().getSessionByTenant(this.tenantId)
-	if (!session?.accessToken) {
-		throw new Error('No valid session for tenant');
-	}
-			accessToken = session?.accessToken
-		}
-		const apiConfig = new Configuration({
-			baseurl: `https://${this.tenantName}`,
-			tokenUrl: `https://${this.tenantName}/oauth/token`,
-			accessToken: accessToken,
-		});
-		apiConfig.experimental = true;
-		return apiConfig;
-	}
-
-	private getAxiosWithInterceptors(): AxiosInstance {
-        const key = `sdk-${this.tenantId}-${this.tenantName}`;
-        let instance = ISCClient.axiosInstances.get(key);
-        if (!instance) {
-            instance = axios.create();
-            instance.defaults.headers.common = { [USER_AGENT_HEADER]: USER_AGENT };
-            configureAxios(instance);
-            ISCClient.axiosInstances.set(key, instance);
-        }
-		return instance;
-	}
-
-	private async getAxios(contentType = CONTENT_TYPE_JSON): Promise<AxiosInstance> {
-		const session = await SailPointISCAuthenticationProvider.getInstance().getSessionByTenant(this.tenantId)
-        if (!session?.accessToken) throw new Error('No valid session for tenant');
-
-        const key = `raw-${this.tenantId}-${this.tenantName}-${contentType}`;
-        let instance = ISCClient.axiosInstances.get(key);
-        
-        if (!instance) {
-            instance = axios.create({
-                baseURL: `https://${this.tenantName}`,
-                headers: { "Content-Type": contentType, [USER_AGENT_HEADER]: USER_AGENT }
-            });
-            configureAxios(instance);
-            ISCClient.axiosInstances.set(key, instance);
-        }
-        
-        instance.defaults.headers.common["Authorization"] = `Bearer ${session?.accessToken}`;
-		return instance;
-	}
 
 	public async pingCluster(sourceId: string): Promise<any> {
-		const api = this.getSourcesApi(await this.getApiConfiguration());
-		return (await api.pingCluster({ sourceId })).data;
+		return this.sourceWorkflowDomain.pingCluster(sourceId);
 	}
 
 	public async testSourceConnection(sourceId: string): Promise<any> {
-		const api = this.getSourcesApi(await this.getApiConfiguration());
-		return (await api.testSourceConnection({ sourceId })).data;
+		return this.sourceWorkflowDomain.testSourceConnection(sourceId);
 	}
 
-	public async getSources(): Promise<Source[]> {
-		const api = this.getSourcesApi(await this.getApiConfiguration());
-		const result = await Paginator.paginate(api, api.listSources, { sorters: "name" });
-		return result.data as Source[];
+	public async getSources(limit?: number): Promise<Source[]> {
+		return this.sourceWorkflowDomain.getSources(limit);
 	}
 
 	public async getSourceById(id: string): Promise<Source> {
-		const api = this.getSourcesApi(await this.getApiConfiguration());
-		return (await api.getSource({ id })).data;
+		return this.sourceWorkflowDomain.getSourceById(id);
 	}
 
 	public async cloneSource(sourceId: string, newName: string): Promise<Source> {
-		const source = await this.getSourceById(sourceId);
-		const newSource = { ...source, name: newName, id: undefined, created: undefined, modified: undefined };
-		const api = this.getSourcesApi(await this.getApiConfiguration());
-        const payload = this.version === 'v2025' ? { sourceV2025: newSource } : { source: newSource };
-		return (await api.createSource(payload)).data;
+		return this.sourceWorkflowDomain.cloneSource(sourceId, newName);
 	}
 
-	public async getTransforms(): Promise<Transform[]> {
-		const api = new TransformsApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		const result = await Paginator.paginate(api, api.listTransforms);
-		return (result.data as Transform[]).sort(compareByName);
+	public async getTransforms(limit?: number): Promise<Transform[]> {
+		return this.resourceDataDomain.getTransforms(limit);
 	}
 
 	public async getTransformByName(name: string): Promise<Transform> {
-		const api = new TransformsApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		const resp = await api.listTransforms({ filters: `name eq "${name}"`, count: true });
-		return resp.data[0];
+		return this.resourceDataDomain.getTransformByName(name);
 	}
 
 	public async getTransformById(id: string): Promise<Transform> {
-		return (await (await this.getAxios()).get(`/${this.version}/transforms/${id}`)).data;
+		return this.resourceDataDomain.getTransformById(id);
 	}
 
-	public async getResource(path: string): Promise<any> {
-		return (await (await this.getAxios()).get(path)).data;
+	public async getResource(path: string): Promise<unknown> {
+		return this.resourceDataDomain.getResource(path);
 	}
 
-	public async createResource(path: string, data: any): Promise<any> {
-		return (await (await this.getAxios()).post(path, data)).data;
+	public async createResource(path: string, data: unknown): Promise<unknown> {
+		return this.resourceDataDomain.createResource(path, data);
 	}
 
 	public async deleteResource(path: string): Promise<void> {
-		await (await this.getAxios()).delete(path, { headers: { "X-SailPoint-Experimental": "true" } });
+		return this.resourceDataDomain.deleteResource(path);
 	}
 
-	public async updateResource(path: string, data: string): Promise<any> {
-		return (await (await this.getAxios()).put(path, data)).data;
+	public async updateResource(path: string, data: string): Promise<unknown> {
+		return this.resourceDataDomain.updateResource(path, data);
 	}
 
-	public async patchResource(path: string, data: any): Promise<any> {
-		return (await (await this.getAxios(CONTENT_TYPE_FORM_JSON_PATCH)).patch(path, data)).data;
+	public async patchResource(path: string, data: unknown): Promise<unknown> {
+		return this.resourceDataDomain.patchResource(path, data);
 	}
 
-	public async getWorflows(): Promise<Workflow[]> {
-		const api = this.getWorkflowsApi(await this.getApiConfiguration());
-		return (await api.listWorkflows()).data.sort(compareByName);
+	public async getWorflows(limit?: number): Promise<Workflow[]> {
+		return this.sourceWorkflowDomain.getWorflows(limit);
 	}
 
 	public async getWorflow(id: string): Promise<Workflow> {
-		const api = this.getWorkflowsApi(await this.getApiConfiguration());
-		return (await api.getWorkflow({ id })).data;
+		return this.sourceWorkflowDomain.getWorflow(id);
 	}
 
-	public async getConnectorRules(): Promise<ConnectorRuleResponseBeta[]> {
-		const api = new ConnectorRuleManagementBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.getConnectorRuleList()).data.sort(compareByName);
+	public async getConnectorRuleCreationHistory(id: string): Promise<any[]> {
+		return this.sourceWorkflowDomain.getConnectorRuleCreationHistory(id);
+	}
+
+	public async getConnectorRules(limit?: number): Promise<ConnectorRuleResponseBeta[]> {
+		return this.sourceWorkflowDomain.getConnectorRules(limit);
 	}
 
 	public async getConnectorRuleById(id: string): Promise<ConnectorRuleResponseBeta> {
-		const api = new ConnectorRuleManagementBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.getConnectorRule({ id })).data;
+		return this.sourceWorkflowDomain.getConnectorRuleById(id);
 	}
 
-	public async getAccessProfiles(): Promise<AxiosResponse<AccessProfile[]>> {
-		const api = this.getAccessProfilesApi(await this.getApiConfiguration());
-		return await api.listAccessProfiles(DEFAULT_ACCESSPROFILES_QUERY_PARAMS);
+	public async getAccessProfiles(limit?: number): Promise<AxiosResponse<AccessProfile[]>> {
+		return this.governanceDomain.getAccessProfiles(limit);
 	}
 
 	public async getAccessProfileById(id: string): Promise<AccessProfile> {
-		const api = this.getAccessProfilesApi(await this.getApiConfiguration());
-		return (await api.getAccessProfile({ id })).data;
+		return this.governanceDomain.getAccessProfileById(id);
 	}
 
-	public async getAllRoles(): Promise<Role[]> {
-		const api = this.getRolesApi(await this.getApiConfiguration());
-		const result = await Paginator.paginate(api, api.listRoles, { sorters: "name" });
-		return result.data as Role[];
+	public async getAllRoles(limit?: number): Promise<Role[]> {
+		return this.governanceDomain.getAllRoles(limit);
 	}
 
-	public async getRoles(query: any): Promise<AxiosResponse<Role[]>> {
-		const api = this.getRolesApi(await this.getApiConfiguration());
-		return await api.listRoles({ ...DEFAULT_ROLES_QUERY_PARAMS, ...query });
+	public async getRoles(query: Record<string, unknown>): Promise<AxiosResponse<Role[]>> {
+		return this.governanceDomain.getRoles(query);
 	}
 
     public async paginatedSearchRoles(query: string, limit: number): Promise<AxiosResponse<any[]>> {
-        const search: Search = { indices: ["roles"], query: { query }, sort: ["name"] };
-        const api = new SearchApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-        return await api.searchPost({ search, limit });
+        return this.governanceDomain.paginatedSearchRoles(query, limit);
     }
 
     public async paginatedSearchAccessProfiles(query: string, limit: number): Promise<AxiosResponse<any[]>> {
-        const search: Search = { indices: ["accessprofiles"], query: { query }, sort: ["name"] };
-        const api = new SearchApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-        return await api.searchPost({ search, limit });
+        return this.governanceDomain.paginatedSearchAccessProfiles(query, limit);
     }
 
-	public async listIdentities(query: any): Promise<AxiosResponse<any[]>> {
-		const api = new IdentitiesBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return await api.listIdentities(query);
+    public async getAllIdentities(onProgress?: (count: number, total: number) => void): Promise<Record<string, unknown>[]> {
+        return this.identityCatalogDomain.getAllIdentities(onProgress);
+    }
+
+	public async listIdentities(query: Record<string, unknown>): Promise<AxiosResponse<Record<string, unknown>[]>> {
+		return this.identityCatalogDomain.listIdentities(query);
 	}
 
-    public async searchIdentities(query: string, limit?: number): Promise<any[]> {
-		const api = new SearchApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-        const search: Search = { indices: ["identities"], query: { query }, sort: ["name"] };
-		const resp = await api.searchPost({ search, limit });
-		return resp.data;
+    public async searchIdentities(query: string, limit?: number): Promise<{ items: Record<string, unknown>[], totalCount: number }> {
+		return this.identityCatalogDomain.searchIdentities(query, limit);
 	}
 
-	public async listForms(): Promise<any[]> {
-		const api = new CustomFormsBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.searchFormDefinitionsByTenant({ offset: 0, limit: 100 })).data.results || [];
+	public async listForms(limit?: number): Promise<Record<string, unknown>[]> {
+		return this.identityCatalogDomain.listForms(limit);
 	}
 
-	public async getSearchAttributes(): Promise<any[]> {
-		const api = new SearchAttributeConfigurationBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.getSearchAttributeConfig()).data.sort(compareByName);
+	public async getSearchAttributes(): Promise<Record<string, unknown>[]> {
+		return this.identityCatalogDomain.getSearchAttributes();
 	}
 
-	public async getIdentityAttributes(): Promise<any[]> {
-		const api = new IdentityAttributesBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.listIdentityAttributes({})).data;
+	public async getIdentityAttributes(): Promise<Record<string, unknown>[]> {
+		return this.identityCatalogDomain.getIdentityAttributes();
 	}
 
-    public async getPaginatedApplications(filters: string): Promise<AxiosResponse<any[]>> {
-		const api = new AppsBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return await api.listAllSourceApp({ offset: 0, limit: 100, filters, sorters: "name" });
+    public async getPaginatedApplications(filters: string, limit?: number): Promise<AxiosResponse<Record<string, unknown>[]>> {
+		return this.identityCatalogDomain.getPaginatedApplications(filters, limit);
 	}
 
-    public async getPaginatedCampaigns(filters: string): Promise<AxiosResponse<any[]>> {
-		return await (await this.getAxios()).get(`/${this.version}/campaigns`, { params: { filters, limit: 100, sorters: "-created" } });
+    public async getPaginatedCampaigns(filters: string, limit?: number): Promise<AxiosResponse<Record<string, unknown>[]>> {
+		return this.identityCatalogDomain.getPaginatedCampaigns(filters, limit);
 	}
 
-    public async getServiceDesks(): Promise<any[]> {
-		const api = new ServiceDeskIntegrationApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.getServiceDeskIntegrations({ sorters: "name" })).data;
+    public async getServiceDesks(limit?: number): Promise<Record<string, unknown>[]> {
+		return this.identityCatalogDomain.getServiceDesks(limit);
 	}
 
-    public async getIdentityProfiles(): Promise<any[]> {
-		const api = new IdentityProfilesApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.listIdentityProfiles({})).data;
+    public async getIdentityProfiles(limit?: number): Promise<Record<string, unknown>[]> {
+		return this.identityCatalogDomain.getIdentityProfiles(limit);
 	}
 
-    public async startAccountAggregation(id: string): Promise<any> {
-		const api = this.getSourcesApi(await this.getApiConfiguration());
-		return (await api.importAccounts({ id })).data;
+    public async listAccounts(limit: number = 250): Promise<Record<string, unknown>[]> {
+        return this.discoveryDomain.listAccounts(limit);
+    }
+
+    public async getAccountsForSource(sourceId: string, onProgress?: (count: number, total: number) => void): Promise<Record<string, unknown>[]> {
+        return this.discoveryDomain.getAccountsForSource(sourceId, onProgress);
+    }
+
+    public async getAllAccounts(_onProgress?: (count: number, sourceName?: string, total?: number) => void): Promise<Record<string, unknown>[]> {
+        return this.discoveryDomain.getAllAccounts();
+    }
+
+    public async search(index: string, query: string, limit?: number): Promise<Record<string, unknown>[]> {
+        return this.discoveryDomain.search(index, query, limit);
+    }
+
+    public async startAccountAggregation(id: string): Promise<Record<string, unknown>> {
+		return this.sourceWorkflowDomain.startAccountAggregation(id);
 	}
 
-	public async startEntitlementAggregation(sourceId: string): Promise<any> {
-		const api = this.getSourcesApi(await this.getApiConfiguration());
-		return (await api.importEntitlements({ sourceId })).data;
+	public async startEntitlementAggregation(sourceId: string): Promise<Record<string, unknown>> {
+		return this.sourceWorkflowDomain.startEntitlementAggregation(sourceId);
 	}
 
-    public async startAccountReset(id: string): Promise<any> {
-		const api = this.getSourcesApi(await this.getApiConfiguration());
-		return (await api.deleteAccountsAsync({ id })).data;
+    public async startAccountReset(id: string): Promise<Record<string, unknown>> {
+		return this.sourceWorkflowDomain.startAccountReset(id);
 	}
 
-	public async startEntitlementReset(sourceId: string): Promise<any> {
-		const api = new EntitlementsBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.resetSourceEntitlements({ sourceId })).data;
+	public async startEntitlementReset(sourceId: string): Promise<Record<string, unknown>> {
+		return this.sourceWorkflowDomain.startEntitlementReset(sourceId);
 	}
 
     public async updateLogConfiguration(id: string, duration: number, logLevels: any): Promise<void> {
-		const api = new ManagedClustersBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		await api.putClientLogConfiguration({ id, clientLogConfigurationBeta: { durationMinutes: duration, clientId: "Neovim", logLevels, rootLevel: "INFO" } });
+		return this.adminConfigDomain.updateLogConfiguration(id, duration, logLevels);
 	}
 
-    public async getWorkflowExecutionHistory(id: string): Promise<any[]> {
-		const api = this.getWorkflowsApi(await this.getApiConfiguration());
-		return (await api.getWorkflowExecutions({ id })).data;
+    public async getWorkflowExecutionHistory(id: string): Promise<Record<string, unknown>[]> {
+		return this.sourceWorkflowDomain.getWorkflowExecutionHistory(id);
 	}
 
-    public async updateWorkflowStatus(id: string, status: boolean): Promise<void> {
-		const api = this.getWorkflowsApi(await this.getApiConfiguration());
-		await api.patchWorkflow({ id, jsonPatchOperationBeta: [{ op: "replace", path: "/enabled", value: status }] });
-	}
-
-    public async processIdentities(identityIds: string[]): Promise<any> {
-		const api = new IdentitiesBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.startIdentityProcessing({ processIdentitiesRequestBeta: { identityIds } })).data;
-	}
-
-	public async synchronizeAttributes(identityId: string): Promise<any> {
-		const api = new IdentitiesBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.synchronizeAttributesForIdentity({ identityId })).data;
-	}
-
-    public async updateConnectorRule(rule: ConnectorRuleResponseBeta): Promise<any> {
-		const api = new ConnectorRuleManagementBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-		return (await api.updateConnectorRule({ id: rule.id, connectorRuleUpdateRequestBeta: rule }));
-	}
-
-    public async createRole(role: Role): Promise<any> {
-        const api = this.getRolesApi(await this.getApiConfiguration());
-        const payload = this.version === 'v2025' ? { roleV2025: role } : { role };
-        return (await api.createRole(payload)).data;
+    public async getResourceMetadata(type: string, filter?: string): Promise<{ totalCount: number, lastModified?: string }> {
+        return this.discoveryDomain.getResourceMetadata(type, filter);
     }
 
-    public async createAccessProfile(ap: AccessProfile): Promise<any> {
-        const api = this.getAccessProfilesApi(await this.getApiConfiguration());
-        const payload = this.version === 'v2025' ? { accessProfileV2025: ap } : { accessProfile: ap };
-        return (await api.createAccessProfile(payload)).data;
+    public async updateWorkflowStatus(id: string, status: boolean): Promise<void> {
+		return this.sourceWorkflowDomain.updateWorkflowStatus(id, status);
+	}
+
+    public async processIdentities(identityIds: string[]): Promise<Record<string, unknown>> {
+		return this.identityCatalogDomain.processIdentities(identityIds);
+	}
+
+	public async synchronizeAttributes(identityId: string): Promise<Record<string, unknown>> {
+		return this.identityCatalogDomain.synchronizeAttributes(identityId);
+	}
+
+    public async updateConnectorRule(rule: ConnectorRuleResponseBeta): Promise<unknown> {
+		return this.sourceWorkflowDomain.updateConnectorRule(rule);
+	}
+
+    public async createRole(role: Role): Promise<Record<string, unknown>> {
+        return this.governanceDomain.createRole(role);
+    }
+
+    public async createAccessProfile(ap: AccessProfile): Promise<Record<string, unknown>> {
+        return this.governanceDomain.createAccessProfile(ap);
     }
 
     public async startExportJob(types: any[], options: any): Promise<string> {
-        const api = new SPConfigBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-        const response = await api.exportSpConfig({ exportPayloadBeta: { includeTypes: types, objectOptions: options } });
-        return response.data.jobId;
+        return this.adminConfigDomain.startExportJob(types, options);
     }
 
-    public async startImportJob(data: string, options: any): Promise<string> {
-        const api = new SPConfigBetaApi(await this.getApiConfiguration(), undefined, this.getAxiosWithInterceptors());
-        const formData = new FormData();
-        formData.append("data", Buffer.from(data), "import.json");
-        const response = await api.importSpConfig(formData);
-        return response.data.jobId;
+    public async startImportJob(data: string): Promise<string> {
+        return this.adminConfigDomain.startImportJob(data);
     }
 }
+

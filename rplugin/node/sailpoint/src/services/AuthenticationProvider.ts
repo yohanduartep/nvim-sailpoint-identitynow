@@ -5,6 +5,7 @@ import { AuthenticationMethod, TenantCredentials, TenantToken } from '../models/
 import { parseJwt, isEmpty } from '../utils';
 import { TenantService } from './TenantService';
 import { OAuth2Client } from './OAuth2Client';
+import { logError } from './logger';
 
 class SailPointISCPatSession {
     constructor(
@@ -82,7 +83,7 @@ export class SailPointISCAuthenticationProvider {
                         token = await this.createAccessToken(tenantInfo?.tenantName ?? tenantId, credentials.clientId, credentials.clientSecret);
                         this.tenantService.setTenantAccessToken(tenantId, token);
                         return new SailPointISCPatSession(token.accessToken);
-                    } catch (error) { console.error(error); }
+                    } catch (error) { logError('SailPoint auth token refresh failed:', error); }
                     return null;
                 }
             }
